@@ -25,7 +25,7 @@ services:
       # Mount AI config at runtime (contains API key — NOT baked into image)
       - ./ai_config.json:/app/ai_config.json:ro
     environment:
-      - DATABASE_URL=sqlite:///data/anki.db
+      - DATABASE_URL=sqlite:////data/anki.db
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s

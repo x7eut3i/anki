@@ -14,8 +14,6 @@ RUN npm run build
 
 # --- Stage 2: Runtime ---
 FROM python:3.12-slim
-
-RUN groupadd -r app && useradd -r -g app -d /app app
 WORKDIR /app
 
 # Install Python deps (all have pre-built wheels, no gcc needed)
@@ -29,10 +27,9 @@ COPY backend/app/ ./app/
 COPY --from=frontend /build/out ./static/
 
 # Persistent data directory for SQLite
-RUN mkdir -p /data && chown app:app /data
+RUN mkdir -p /data
 
-ENV DATABASE_URL=sqlite:///data/anki.db
+ENV DATABASE_URL=sqlite:////data/anki.db
 
-USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

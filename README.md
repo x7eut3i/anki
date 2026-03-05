@@ -27,17 +27,47 @@ A spaced-repetition flashcard web app powered by the **FSRS-6** algorithm. Suppo
 
 ## Quick Start
 
-### Docker (recommended)
+### Docker Compose (recommended)
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATABASE_URL=sqlite:////data/anki.db
+      - SECRET_KEY=change-me-to-a-random-string
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+```
 
 ```bash
-# Build the image
+docker compose up -d --build
+# Open http://localhost:8000
+```
+
+### Docker (standalone)
+
+```bash
+# Build
 docker build -t anki-app .
 
-# Run (data persisted in a named volume)
+# Run (data persisted in a bind mount)
 docker run -d \
   --name anki \
   -p 8000:8000 \
-  -v anki-data:/data \
+  -v ./data:/data \
+  -e DATABASE_URL=sqlite:////data/anki.db \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   anki-app
 
@@ -131,8 +161,8 @@ Edit `anki.conf` to set your domain and container name.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:///data/flashcards.db` | SQLite database path |
-| `SECRET_KEY` | `change-me...` | JWT signing key (set a random string!) |
+| `DATABASE_URL` | `sqlite:////data/anki.db` | SQLite path (4 slashes = absolute) |
+| `SECRET_KEY` | auto-generated | JWT signing key (set a random string!) |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Token lifetime (24 hours) |
 | `AI_ENABLED` | `false` | Enable AI features |
 | `AI_API_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API endpoint |
