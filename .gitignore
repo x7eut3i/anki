@@ -1,0 +1,91 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# ============================================================
+# Node.js / Frontend
+# ============================================================
+node_modules/
+.next/
+out/
+frontend/out/
+frontend/.next/
+frontend/node_modules/
+*.tsbuildinfo
+
+# ============================================================
+# Sensitive / Secret files
+# ============================================================
+ai_config.json
+.env
+.env.*
+!.env.example
+backend/data/.secret_key
+
+# ============================================================
+# Database files
+# ============================================================
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak
+backend/data/flashcards.db
+backend/data/flashcards.db.bak
+
+# ============================================================
+# Logs
+# ============================================================
+*.log
+backend/data/app.log
+backend/data/log_retention.json
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================================
+# Test / Coverage
+# ============================================================
+.pytest_cache/
+.coverage
+htmlcov/
+test-results/
+frontend/test-results/
+coverage/
+
+# ============================================================
+# Build artifacts
+# ============================================================
+backend/static/
+!backend/static/404.html
+*.tar.gz
+
+# ============================================================
+# AI model test results (may contain API responses)
+# ============================================================
+ai_model_test/
+
+.gitbak/

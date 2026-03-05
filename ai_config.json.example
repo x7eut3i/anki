@@ -1,0 +1,35 @@
+{
+    "_comment": "AI配置文件 - 复制为 ai_config.json 并填写你的API密钥",
+    "_usage": "将此文件中的值填入AI助手配置页面，或通过API直接设置",
+    "api_base_url": "https://api.openai.com/v1",
+    "api_key": "sk-your-api-key-here",
+    "model": "gpt-4o-mini",
+    "max_daily_calls": 100,
+    "_providers": {
+        "deepseek": {
+            "api_base_url": "https://api.deepseek.com/v1",
+            "models": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+            "note": "推荐中文场景，价格最优"
+        },
+        "openai": {
+            "api_base_url": "https://api.openai.com/v1",
+            "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"],
+            "note": "全球通用，英文最佳"
+        },
+        "qwen": {
+            "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "models": ["qwen-turbo", "qwen-plus", "qwen-max"],
+            "note": "阿里云通义千问"
+        },
+        "moonshot": {
+            "api_base_url": "https://api.moonshot.cn/v1",
+            "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+            "note": "月之暗面 Kimi"
+        },
+        "zhipu": {
+            "api_base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "models": ["glm-4", "glm-4-flash", "glm-3-turbo"],
+            "note": "智谱AI"
+        }
+    }
+}

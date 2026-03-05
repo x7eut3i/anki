@@ -1,0 +1,38 @@
+# ============================================================
+# docker-compose.yml — 公考闪卡 (Anki Flashcard App)
+#
+# Usage:
+#   docker compose up -d --build     Build & start
+#   docker compose logs -f           Follow logs
+#   docker compose down              Stop & remove containers
+#
+# Data persistence:
+#   SQLite database is stored in a named volume (anki-data).
+#   To backup:
+#     docker cp anki-app:/data/anki.db ./backup_anki.db
+# ============================================================
+
+services:
+  app:
+    container_name: anki-app
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      # Persistent SQLite database
+      - anki-data:/data
+      # Mount AI config at runtime (contains API key — NOT baked into image)
+      - ./ai_config.json:/app/ai_config.json:ro
+    environment:
+      - DATABASE_URL=sqlite:///data/anki.db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  anki-data:
+    driver: local

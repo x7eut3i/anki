@@ -1,0 +1,1 @@
+python -m ai_model_test.run_comparison

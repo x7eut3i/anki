@@ -1,0 +1,16 @@
+{
+  "name": "Anki Flashcard",
+  "short_name": "Anki Cards",
+  "description": "基于FSRS算法的智能闪卡复习平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

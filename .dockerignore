@@ -1,0 +1,53 @@
+# Git / VCS
+.git
+.gitignore
+
+# Python runtime
+.venv
+backend/.venv
+backend/.pytest_cache
+backend/ankigong.egg-info
+backend/anki_flashcard.egg-info
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Node build (we rebuild in Docker)
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# Sensitive / secrets
+ai_config.json
+.env
+.secret_key
+
+# Data (persistent volume, not baked in)
+backend/data
+data/
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db.bak
+
+# Tests & CI
+tests/
+backend/tests/
+frontend/test-results/
+frontend/e2e/
+ai_model_test/
+
+# IDE
+.vscode
+.idea
+
+# Build scripts (not needed inside container)
+build.bat
+build.sh
+run_pipeline.bat
+run_ai_model_test.bat
+setup_e2e.py
+
+# Docs (optional)
+*.md
+LICENSE
