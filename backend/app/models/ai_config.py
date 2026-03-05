@@ -16,6 +16,7 @@ class AIConfig(SQLModel, table=True):
     model_reading: str = Field(default="")   # Model for deep reading analysis (empty = use default)
     max_daily_calls: int = Field(default=50)
     import_batch_size: int = Field(default=30)
+    import_concurrency: int = Field(default=3)  # Number of batches processed concurrently during AI import
     max_tokens: int = Field(default=8192)
     temperature: float = Field(default=0.3)
     max_retries: int = Field(default=3)  # AI call retry count

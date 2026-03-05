@@ -53,6 +53,7 @@ async def _run_ingestion_job():
     """Internal job function — runs the ingestion pipeline without auth context.
 
     Creates its own DB session and finds an admin user to act as the owner.
+    Checks for already-running jobs before starting.
     """
     logger.info("⏰ Scheduled ingestion job triggered at %s", datetime.now(_tz.utc).isoformat())
 
@@ -70,7 +71,7 @@ async def _run_ingestion_job():
     try:
         logger.info("🚀 Starting scheduled ingestion pipeline...")
         await _run_pipeline_internal(run_type="scheduled")
-        logger.info("✅ Scheduled ingestion pipeline completed successfully")
+        logger.info("✅ Scheduled ingestion pipeline completed")
     except Exception as e:
         logger.error("❌ Scheduled ingestion failed: %s", e, exc_info=True)
 

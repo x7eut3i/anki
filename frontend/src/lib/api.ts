@@ -510,6 +510,9 @@ export const ingestion = {
   run: (token: string) =>
     request<any>("/api/ingestion/run", { method: "POST", token }),
 
+  cancel: (logId: number, token: string) =>
+    request<any>(`/api/ingestion/cancel/${logId}`, { method: "POST", token }),
+
   getLogs: (limit?: number, token?: string) =>
     request<any[]>(`/api/ingestion/logs${limit ? `?limit=${limit}` : ""}`, { token: token || "" }),
 

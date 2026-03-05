@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "@/lib/store";
 import { ingestion } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,8 @@ import {
   AlertTriangle,
   SkipForward,
   Info,
+  Square,
+  Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +57,8 @@ export default function IngestionPage() {
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [expandedLog, setExpandedLog] = useState<number | null>(null);
+  const [confirmCancelId, setConfirmCancelId] = useState<number | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const isAdmin = user?.is_admin;
 
   const loadData = async () => {
@@ -67,6 +71,10 @@ export default function IngestionPage() {
       ]);
       setConfig(cfg);
       setLogs(logsData);
+      // If any job is running, mark button state
+      if (logsData.some((l: IngestionLog) => l.status === "running")) {
+        setRunning(true);
+      }
     } catch (err) {
       console.error("Failed to load ingestion data:", err);
     } finally {
@@ -121,16 +129,36 @@ export default function IngestionPage() {
     setRunning(true);
     try {
       await ingestion.run(token);
-      // Reload logs - polling will continue if status is still "running"
+      // Immediately reload logs — the new "running" entry should appear
       const logsData = await ingestion.getLogs(20, token);
       setLogs(logsData);
       if (logsData.length > 0) {
         setExpandedLog(logsData[0].id);
       }
-      // Don't set running=false here, let the polling effect handle it
+      // Polling effect will track progress from here
     } catch (err: any) {
-      alert("抓取失败: " + (err.message || "未知错误"));
+      const msg = err?.message || "未知错误";
+      // 409 = already running
+      if (msg.includes("已有抓取任务")) {
+        alert(msg);
+      } else {
+        alert("抓取启动失败: " + msg);
+      }
       setRunning(false);
+    }
+  };
+
+  const handleCancel = async (logId: number) => {
+    if (!token) return;
+    setCancelling(true);
+    try {
+      await ingestion.cancel(logId, token);
+      setConfirmCancelId(null);
+      // Polling will pick up the status change
+    } catch (err: any) {
+      alert("取消失败: " + (err?.message || "未知错误"));
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -325,6 +353,19 @@ export default function IngestionPage() {
                   低于此分数的文章不会自动生成卡片
                 </p>
               </div>
+              <div>
+                <label className="text-sm font-medium">并发处理数</label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={config.concurrency ?? 3}
+                  onChange={(e) => setConfig({ ...config, concurrency: parseInt(e.target.value) || 3 })}
+                  className="mt-1"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  同时处理的文章数量，增大可提高抓取速度。默认 3
+                </p>
+              </div>
             </div>
 
             <div className="flex items-center gap-6">
@@ -402,6 +443,7 @@ export default function IngestionPage() {
           {logs.map((log) => {
             const entries = parseLogEntries(log.log_detail);
             const isExpanded = expandedLog === log.id;
+            const isRunning = log.status === "running";
             return (
               <Card key={log.id}>
                 <div
@@ -413,6 +455,8 @@ export default function IngestionPage() {
                       <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
                     ) : log.status === "error" ? (
                       <XCircle className="h-5 w-5 text-red-500 shrink-0" />
+                    ) : log.status === "cancelled" ? (
+                      <Ban className="h-5 w-5 text-amber-500 shrink-0" />
                     ) : (
                       <Loader2 className="h-5 w-5 text-blue-500 animate-spin shrink-0" />
                     )}
@@ -427,6 +471,11 @@ export default function IngestionPage() {
                         <Badge variant="outline" className="text-xs">
                           {log.run_type === "manual" ? "手动" : "定时"}
                         </Badge>
+                        {log.status === "cancelled" && (
+                          <Badge variant="secondary" className="text-xs text-amber-600">
+                            已取消
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
                         <span>来源 {log.sources_processed}</span>
@@ -435,18 +484,57 @@ export default function IngestionPage() {
                         <span>跳过 {log.articles_skipped}</span>
                         <span>卡片 {log.cards_created}</span>
                         {log.errors_count > 0 && (
-                          <span className={log.status === "running" ? "text-amber-500" : "text-red-500"}>
-                            {log.status === "running" ? "⚠️" : "错误"} {log.errors_count}
+                          <span className={isRunning ? "text-amber-500" : "text-red-500"}>
+                            {isRunning ? "⚠️" : "错误"} {log.errors_count}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
-                  {isExpanded ? (
-                    <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                  )}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Cancel button — inline confirm, not modal */}
+                    {isRunning && isAdmin && (
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        {confirmCancelId === log.id ? (
+                          <>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              disabled={cancelling}
+                              onClick={() => handleCancel(log.id)}
+                            >
+                              {cancelling ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                              确认取消
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs px-2"
+                              onClick={() => setConfirmCancelId(null)}
+                            >
+                              返回
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs px-2 text-amber-600 hover:text-amber-700"
+                            onClick={() => setConfirmCancelId(log.id)}
+                          >
+                            <Square className="h-3 w-3 mr-1" />
+                            取消抓取
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {isExpanded ? (
+                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
                 </div>
 
                 {isExpanded && entries.length > 0 && (

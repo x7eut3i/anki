@@ -44,6 +44,7 @@ def _config_to_response(config: AIConfig) -> AIConfigResponse:
         model_reading=config.model_reading or "",
         max_daily_calls=config.max_daily_calls,
         import_batch_size=getattr(config, "import_batch_size", 30) or 30,
+        import_concurrency=getattr(config, "import_concurrency", 3) or 3,
         max_tokens=getattr(config, "max_tokens", 8192) or 8192,
         temperature=getattr(config, "temperature", 0.3) or 0.3,
         max_retries=getattr(config, "max_retries", 3) or 3,
@@ -118,6 +119,7 @@ def create_ai_config(
         model_reading=data.model_reading,
         max_daily_calls=data.max_daily_calls,
         import_batch_size=data.import_batch_size,
+        import_concurrency=data.import_concurrency,
     )
     session.add(config)
     session.commit()
