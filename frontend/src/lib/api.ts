@@ -262,7 +262,7 @@ export const ai = {
     request<any>("/api/ai/batch-enrich", { method: "POST", body: JSON.stringify(data), token }),
   completeCards: (data: { cards: { front: string; category?: string }[]; deck_id: number }, token: string) =>
     request<{ cards: { front: string; back: string; explanation: string; distractors: string; meta_info?: string; tags?: string; category?: string }[]; completed: number }>("/api/ai/complete-cards", { method: "POST", body: JSON.stringify(data), token }),
-  completeCardsAsync: (data: { cards: { front: string; category?: string }[]; deck_id: number; category_id?: number | null }, token: string) =>
+  completeCardsAsync: (data: { cards: { front: string; category?: string }[]; deck_id: number; category_id?: number | null; allow_correction?: boolean }, token: string) =>
     request<{ job_id: number; message: string }>("/api/ai/complete-cards/async", { method: "POST", body: JSON.stringify(data), token }),
   smartImport: (deckId: number, file: File, token: string) => {
     const form = new FormData();
@@ -291,12 +291,12 @@ export const ai = {
 // ---------------------------------------------------------------------------
 
 export const importExport = {
-  importCSV: (deckId: number, file: File, token: string, categoryId?: number, skipAi?: boolean) => {
+  importCSV: (deckId: number, file: File, token: string, categoryId?: number, allowCorrection?: boolean) => {
     const form = new FormData();
     form.append("file", file);
     const params = new URLSearchParams({ deck_id: String(deckId) });
     if (categoryId) params.append("category_id", String(categoryId));
-    if (skipAi) params.append("skip_ai", "true");
+    if (allowCorrection) params.append("allow_correction", "true");
     return fetch(`${API_BASE}/api/import-export/import/csv?${params}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -304,24 +304,24 @@ export const importExport = {
     }).then((r) => r.json());
   },
 
-  importJSON: (deckId: number, file: File, token: string, categoryId?: number, skipAi?: boolean) => {
+  importJSON: (deckId: number, file: File, token: string, categoryId?: number, allowCorrection?: boolean) => {
     const form = new FormData();
     form.append("file", file);
     const params = new URLSearchParams({ deck_id: String(deckId) });
     if (categoryId) params.append("category_id", String(categoryId));
-    if (skipAi) params.append("skip_ai", "true");
+    if (allowCorrection) params.append("allow_correction", "true");
     return fetch(`${API_BASE}/api/import-export/import/json?${params}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: form,
     }).then((r) => r.json());
   },
-  importExcel: (deckId: number, file: File, token: string, categoryId?: number, skipAi?: boolean) => {
+  importExcel: (deckId: number, file: File, token: string, categoryId?: number, allowCorrection?: boolean) => {
     const form = new FormData();
     form.append("file", file);
     const params = new URLSearchParams({ deck_id: String(deckId) });
     if (categoryId) params.append("category_id", String(categoryId));
-    if (skipAi) params.append("skip_ai", "true");
+    if (allowCorrection) params.append("allow_correction", "true");
     return fetch(`${API_BASE}/api/import-export/import/excel?${params}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },

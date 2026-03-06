@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useAuthStore } from "@/lib/store";
+import { saveSortPreference, loadSortPreference } from "@/lib/sort-preferences";
 import { decks as deckApi, categories as catApi, cards as cardsApi, tags as tagsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,24 +27,7 @@ import {
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { CardDetailPanel, CardHeaderBadges, parseJson } from "@/components/card-detail";
-
-/* Highlight matching text helper */
-function HighlightText({ text, query }: { text: string; query: string }) {
-  if (!query || !text) return <>{text}</>;
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-  return (
-    <>
-      {parts.map((part, i) =>
-        part.toLowerCase() === query.toLowerCase() ? (
-          <mark key={i} className="bg-yellow-200 dark:bg-yellow-700 rounded-sm px-0.5">{part}</mark>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </>
-  );
-}
+import { HighlightText } from "@/components/highlight-text";
 
 export default function DecksPage() {
   const { token } = useAuthStore();
@@ -67,10 +51,15 @@ export default function DecksPage() {
   // Sort & filter
   type SortKey = "name" | "card_count" | "created_at";
   type SortDir = "asc" | "desc";
-  const [sortKey, setSortKey] = useState<SortKey>("name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPreference("decks", { sortKey: "name", sortDir: "asc" }).sortKey as SortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPreference("decks", { sortKey: "name", sortDir: "asc" }).sortDir as SortDir);
   const [searchQuery, setSearchQuery] = useState("");
   const [catFilter, setCatFilter] = useState<string>("all");
+
+  // Persist sort preferences
+  useEffect(() => {
+    saveSortPreference("decks", { sortKey, sortDir });
+  }, [sortKey, sortDir]);
 
   const loadDecks = async (query?: string) => {
     if (!token) return;
@@ -487,7 +476,7 @@ export default function DecksPage() {
                       {/* Expanded card detail — reuses shared CardDetailPanel */}
                       {isExpanded && !searchBatchMode && (
                         <div className="px-3 pb-3">
-                          <CardDetailPanel card={card} />
+                          <CardDetailPanel card={card} searchQuery={searchQuery.trim()} />
                           <div className="mt-2 flex justify-end">
                             <Link
                               href={`/deck-detail?id=${card.deck_id}`}

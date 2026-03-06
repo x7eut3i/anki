@@ -22,3 +22,6 @@ class User(SQLModel, table=True):
 
     # AI import preferences
     ai_import_batch_size: int = Field(default=30)
+
+    # Display preferences
+    timezone: str = Field(default="Asia/Shanghai")

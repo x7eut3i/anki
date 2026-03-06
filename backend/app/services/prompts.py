@@ -252,6 +252,7 @@ def make_import_user_prompt(
     batch_text: str,
     category_list: str,
     forced_category: str | None = None,
+    allow_correction: bool = False,
 ) -> str:
     """Build user prompt for file import."""
     if forced_category:
@@ -262,6 +263,17 @@ def make_import_user_prompt(
     else:
         cat_instruction = f"根据内容自动判断最佳category，从以下选择：{category_list}"
 
+    if allow_correction:
+        correction_rule = (
+            "【允许修正】你可以对用户提供的原始内容进行修正、纠错和优化。"
+            "如果发现事实错误、表述不准确、不规范的地方，请直接修正为正确内容。"
+        )
+    else:
+        correction_rule = (
+            "【禁止修改原始内容】用户提供的front和back内容必须原样保留，不得修改、改写或重新措辞。"
+            "你只能补充缺失的字段（explanation、distractors、tags、meta_info等），不能改变用户已有的题目和答案文本。"
+        )
+
     return (
         f"将以下内容转换为学习卡片JSON数组。\n\n"
         f"文件名: {filename}\n\n"
@@ -271,7 +283,8 @@ def make_import_user_prompt(
         f"2. 如果是单列数据（成语列表、词语列表），front=条目本身，back=释义/定义\n"
         f"3. 如果已有问答格式，保持原始前后关系\n"
         f"4. {cat_instruction}\n"
-        f"5. 严格按照system prompt中定义的各类型卡片格式生成\n\n"
+        f"5. {correction_rule}\n"
+        f"6. 严格按照system prompt中定义的各类型卡片格式生成\n\n"
         f"回复纯JSON数组。"
     )
 

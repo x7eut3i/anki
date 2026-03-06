@@ -55,6 +55,8 @@ def _migrate_add_columns():
         ("ingestion_configs", "schedule_type", "TEXT DEFAULT 'daily'"),
         ("ingestion_configs", "schedule_days", "TEXT DEFAULT ''"),
         ("ingestion_configs", "timezone", "TEXT DEFAULT 'Asia/Shanghai'"),
+        ("ingestion_logs", "updated_at", "TIMESTAMP"),
+        ("users", "timezone", "TEXT DEFAULT 'Asia/Shanghai'"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

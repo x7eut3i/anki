@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { formatDateTime } from "@/lib/timezone";
 
 interface PromptConfig {
   id: number;
@@ -45,7 +46,7 @@ export default function PromptsPage() {
     try {
       const data = await promptsApi.list(token);
       // Filter out deprecated prompts
-      setPromptList(data.filter((p: PromptConfig) => p.prompt_key !== "smart_import"));
+      setPromptList(data.filter((p: PromptConfig) => p.prompt_key !== "smart_import" && p.prompt_key !== "batch_enrich"));
     } catch (err) {
       console.error("Failed to load prompts:", err);
     } finally {
@@ -220,7 +221,7 @@ export default function PromptsPage() {
                         </pre>
                       )}
                       <p className="text-[10px] text-muted-foreground mt-2">
-                        更新时间: {new Date(prompt.updated_at).toLocaleString("zh-CN")}
+                        更新时间: {formatDateTime(prompt.updated_at)}
                       </p>
                     </div>
                   )}

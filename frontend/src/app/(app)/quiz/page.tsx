@@ -16,7 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isHiddenTag } from "@/components/card-detail";
+import { isHiddenTag, ArticleSourceLink } from "@/components/card-detail";
 import Link from "next/link";
 
 type QuizQuestion = {
@@ -129,8 +129,9 @@ export default function QuizPage() {
                     )
                   }
                 >
-                  {cat.icon} {cat.name}
-                </Badge>
+                  {cat.icon} {cat.name}                  {cat.card_count != null && (
+                    <span className="ml-1 opacity-60">({cat.card_count})</span>
+                  )}                </Badge>
               ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
@@ -231,6 +232,7 @@ export default function QuizPage() {
                         {r.explanation && (
                           <p className="text-xs text-muted-foreground mt-1">{r.explanation}</p>
                         )}
+                        {r.source && <div className="mt-1"><ArticleSourceLink sourceUrl={r.source} /></div>}
                       </div>
                     </div>
                   </div>

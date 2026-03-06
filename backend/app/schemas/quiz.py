@@ -16,8 +16,7 @@ class QuizQuestion(BaseModel):
     question: str
     choices: list[str] | None = None  # For choice type (4 options including correct)
     category_name: str
-    tags_list: list[dict] = []  # [{id, name, color}]
-    time_limit: int = 0
+    tags_list: list[dict] = []  # [{id, name, color}]    source: str = ""  # Card source URL (for article source display)    time_limit: int = 0
 
 
 class QuizAnswer(BaseModel):
@@ -34,6 +33,7 @@ class QuizResult(BaseModel):
     correct_answer: str
     user_answer: str
     explanation: str
+    source: str = ""
 
 
 class QuizSessionResponse(BaseModel):

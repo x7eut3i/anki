@@ -68,6 +68,7 @@ def list_analyses(
     is_starred: bool | None = None,
     min_quality: int | None = None,
     source_name: str | None = None,
+    source_url: str | None = None,
     search: str | None = None,
     tag_id: int | None = None,
     sort_by: str | None = Query(None),  # created_at, publish_date, quality_score, word_count
@@ -88,6 +89,8 @@ def list_analyses(
         query = query.where(ArticleAnalysis.quality_score >= min_quality)
     if source_name:
         query = query.where(ArticleAnalysis.source_name == source_name)
+    if source_url:
+        query = query.where(ArticleAnalysis.source_url == source_url)
     if search:
         query = query.where(ArticleAnalysis.title.contains(search))
     if tag_id is not None:
@@ -694,10 +697,12 @@ def _build_analysis_html(title: str, data: dict) -> str:
                     qtype = item.get("question_type", "")
                     parts.append(
                         f'<div style="margin:6px 0;padding:8px 12px;background:#fef2f2;border-left:3px solid #ef4444;border-radius:4px;">'
-                        f'<p style="font-weight:600;color:#b91c1c;">{_esc(item.get("question", ""))}</p>'
                     )
                     if qtype:
-                        parts.append(f'<span style="font-size:11px;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:8px;">题型：{_esc(qtype)}</span>')
+                        parts.append(f'<span style="display:inline-block;font-size:11px;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:8px;margin-bottom:4px;">题型：{_esc(qtype)}</span>')
+                    parts.append(
+                        f'<p style="font-weight:600;color:#b91c1c;margin:0;">{_esc(item.get("question", ""))}</p>'
+                    )
                     if item.get("reference_answer"):
                         parts.append(
                             f'<details style="margin-top:4px;"><summary style="cursor:pointer;color:#991b1b;font-size:13px;">📄 参考答案</summary>'

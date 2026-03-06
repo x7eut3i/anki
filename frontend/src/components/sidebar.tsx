@@ -73,12 +73,22 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: "数据管理",
-    icon: Database,
+    label: "文章抓取",
+    icon: Globe,
     defaultOpen: false,
     items: [
       { href: "/sources", label: "来源管理", icon: Globe },
       { href: "/ingestion", label: "自动抓取", icon: Zap },
+    ],
+  },
+  {
+    label: "AI管理",
+    icon: Sparkles,
+    defaultOpen: false,
+    items: [
+      { href: "/ai", label: "AI助手", icon: Sparkles },
+      { href: "/jobs", label: "AI任务", icon: Zap },
+      { href: "/ai-stats", label: "AI统计", icon: BarChart3 },
       { href: "/prompt-config", label: "Prompt管理", icon: FileText },
     ],
   },
@@ -87,10 +97,7 @@ const navGroups: NavGroup[] = [
     icon: Monitor,
     defaultOpen: false,
     items: [
-      { href: "/ai", label: "AI助手", icon: Sparkles },
-      { href: "/jobs", label: "AI任务", icon: Zap },
       { href: "/logs", label: "日志查看", icon: ScrollText },
-      { href: "/ai-stats", label: "AI统计", icon: BarChart3 },
       { href: "/user-management", label: "用户管理", icon: Users },
       { href: "/settings", label: "设置", icon: Settings },
     ],
@@ -233,7 +240,7 @@ export default function Sidebar() {
       {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-card border-t z-50 safe-area-bottom">
         <div className="flex justify-around py-2">
-          {allNavItems.slice(0, 4).map((item) => {
+          {allNavItems.slice(0, 5).map((item) => {
             const Icon = item.icon;
             const active = isNavActive(item);
             return (
@@ -312,7 +319,7 @@ export default function Sidebar() {
                 );
               })}
             </div>
-            {/* User info + logout */}
+            {/* User info (no logout in mobile drawer to prevent accidental taps) */}
             <div className="border-t px-4 py-3 flex items-center gap-3">
               <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
                 <span className="text-sm font-medium text-primary">
@@ -322,13 +329,6 @@ export default function Sidebar() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{user?.username || "用户"}</p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => { logout(); window.location.href = "/login"; }}
-              >
-                <LogOut className="h-4 w-4 mr-1" /> 退出
-              </Button>
             </div>
           </div>
         </div>

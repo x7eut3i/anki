@@ -28,6 +28,7 @@ class ImportExportService:
     async def ai_import(
         self, raw_text: str, filename: str, deck_id: int,
         category_id: int | None = None,
+        allow_correction: bool = False,
     ) -> dict | None:
         """AI-enhanced import: send raw file content to AI for transformation.
 
@@ -167,6 +168,7 @@ class ImportExportService:
                         batch_text=batch_text,
                         category_list=cat_list,
                         forced_category=forced_category_name,
+                        allow_correction=allow_correction,
                     ),
                 },
             ]

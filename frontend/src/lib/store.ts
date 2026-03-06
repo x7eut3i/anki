@@ -3,6 +3,7 @@
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { initTimezone } from "./timezone";
 
 // ---------------------------------------------------------------------------
 // Auth store
@@ -20,7 +21,10 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       token: null,
       user: null,
-      setAuth: (token, user) => set({ token, user }),
+      setAuth: (token, user) => {
+        if (user?.timezone) initTimezone(user.timezone);
+        set({ token, user });
+      },
       logout: () => set({ token: null, user: null }),
     }),
     { name: "anki-auth" }

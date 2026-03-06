@@ -1005,7 +1005,7 @@ def _bg_batch_enrich(job_id: int, user_id: int, card_ids: list[int], deck_id: in
 
 def _bg_complete_and_create_cards(
     job_id: int, user_id: int, deck_id: int, category_id: int | None,
-    cards_input: list[dict],
+    cards_input: list[dict], allow_correction: bool = False,
 ):
     """Background task: AI-complete cards then bulk create them."""
     from sqlmodel import Session as SyncSession
@@ -1030,8 +1030,13 @@ def _bg_complete_and_create_cards(
                 return
 
             # Separate cards that need AI completion from those that don't
-            needs_ai = [c for c in cards_input if not c.get("back", "").strip()]
-            has_back = [c for c in cards_input if c.get("back", "").strip()]
+            # When allow_correction is true, send ALL cards to AI for potential correction
+            if allow_correction:
+                needs_ai = cards_input[:]
+                has_back = []
+            else:
+                needs_ai = [c for c in cards_input if not c.get("back", "").strip()]
+                has_back = [c for c in cards_input if c.get("back", "").strip()]
 
             ai_results: dict[int, dict] = {}  # index -> completion
 
@@ -1041,11 +1046,22 @@ def _bg_complete_and_create_cards(
                 all_cats = session.exec(select(Category).where(Category.is_active == True)).all()
                 cat_list = "、".join(c.name for c in all_cats)
 
-                cards_text = [{"index": i, "front": c.get("front", ""), "category": c.get("category", "")} for i, c in enumerate(needs_ai)]
+                cards_text = [{"index": i, "front": c.get("front", ""), "back": c.get("back", ""), "category": c.get("category", "")} for i, c in enumerate(needs_ai)]
+
+                if allow_correction:
+                    correction_instruction = (
+                        "【允许修正】如果发现用户提供的front内容有事实错误、表述不准确、不规范的地方，可以直接修正。\n"
+                    )
+                else:
+                    correction_instruction = (
+                        "【禁止修改原始内容】用户提供的front内容必须原样保留在front字段中，不得修改、改写或重新措辞。你只能补充其他字段。\n"
+                    )
+
                 user_prompt = (
                     f"请为以下卡片生成完整的内容（JSON数组）。\n"
                     f"每张卡片已有front（题目）和category（分类），请根据system prompt中的格式要求补充所有字段：\n"
                     f"back、explanation、distractors（3个）、tags、meta_info（含knowledge、exam_focus、alternate_questions、facts）。\n\n"
+                    f"{correction_instruction}\n"
                     f"可用分类：{cat_list}\n\n"
                     f"待补全的卡片：\n{_json.dumps(cards_text, ensure_ascii=False)}\n\n"
                     f"回复纯JSON数组，每项包含index字段和所有补全的字段。"
@@ -1151,12 +1167,14 @@ async def complete_cards_async(
     cards_input = data.get("cards", [])
     deck_id = data.get("deck_id")
     category_id = data.get("category_id")
+    allow_correction = data.get("allow_correction", False)
     if not cards_input or not deck_id:
         raise HTTPException(status_code=400, detail="需要提供 cards 和 deck_id")
 
     job = create_job(session, current_user.id, "complete_cards", f"AI补全并创建 {len(cards_input)} 张卡片")
     background_tasks.add_task(
-        _bg_complete_and_create_cards, job.id, current_user.id, deck_id, category_id, cards_input
+        _bg_complete_and_create_cards, job.id, current_user.id, deck_id, category_id, cards_input,
+        allow_correction=allow_correction,
     )
     return {"job_id": job.id, "message": f"AI 卡片创建任务已提交，{len(cards_input)} 张卡片后台处理中"}
 

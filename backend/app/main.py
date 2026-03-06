@@ -260,6 +260,48 @@ def seed_ai_configs():
         logger.error("❌ Failed to seed AI configs: %s", e, exc_info=True)
 
 
+def seed_article_sources():
+    """Seed default article sources (人民日报 & 求是) if none exist."""
+    from sqlmodel import Session, select
+    from app.database import engine
+
+    DEFAULT_SOURCES = [
+        {
+            "name": "人民日报",
+            "url": "https://paper.people.com.cn/rmrb/",
+            "source_type": "html",
+            "category": "时政热点",
+            "is_system": True,
+            "is_enabled": True,
+            "description": "人民日报电子版，权威时政新闻来源",
+        },
+        {
+            "name": "求是",
+            "url": "http://www.qstheory.cn/",
+            "source_type": "html",
+            "category": "政治理论",
+            "is_system": True,
+            "is_enabled": True,
+            "description": "求是网，党的理论学习和政策解读",
+        },
+    ]
+
+    try:
+        with Session(engine) as session:
+            existing = session.exec(select(ArticleSource)).first()
+            if not existing:
+                logger.info("No article sources found, seeding %d default sources...", len(DEFAULT_SOURCES))
+                for src_data in DEFAULT_SOURCES:
+                    src = ArticleSource(**src_data)
+                    session.add(src)
+                session.commit()
+                logger.info("✅ Default article sources seeded successfully")
+            else:
+                logger.debug("Article sources already exist, skipping seed")
+    except Exception as e:
+        logger.error("❌ Failed to seed article sources: %s", e, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -270,6 +312,7 @@ async def lifespan(app: FastAPI):
     seed_categories()
     seed_default_decks()
     seed_ai_configs()
+    seed_article_sources()
 
     # Clean up old logs based on retention setting
     try:

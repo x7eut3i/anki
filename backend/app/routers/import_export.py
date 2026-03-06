@@ -28,7 +28,7 @@ def _run_async(coro):
 def _bg_ai_import(
     job_id: int, user_id: int, deck_id: int, content_text: str,
     filename: str, category_id: int | None, file_bytes: bytes | None = None,
-    skip_ai: bool = False,
+    allow_correction: bool = False,
 ):
     """Background task for AI-enhanced import (CSV/JSON/Excel)."""
     from sqlmodel import Session as SyncSession
@@ -43,17 +43,15 @@ def _bg_ai_import(
             # Try AI import
             update_job_status(job_id, "running", progress=20)
             ai_result = None
-            if skip_ai:
-                logger.debug("AI import skipped by user request")
-            else:
-                try:
-                    ai_result = _run_async(service.ai_import(
-                        content_text, filename, deck_id,
-                        category_id=category_id,
-                    ))
-                except Exception as e:
-                    logger.warning("BG AI import failed, falling back: %s", e)
-                    ai_result = None
+            try:
+                ai_result = _run_async(service.ai_import(
+                    content_text, filename, deck_id,
+                    category_id=category_id,
+                    allow_correction=allow_correction,
+                ))
+            except Exception as e:
+                logger.warning("BG AI import failed, falling back: %s", e)
+                ai_result = None
 
             if ai_result is not None:
                 count = ai_result.get("created", 0) or ai_result.get("imported", 0)
@@ -133,7 +131,7 @@ def export_json(
 async def import_csv(
     deck_id: int,
     category_id: int | None = None,
-    skip_ai: bool = False,
+    allow_correction: bool = False,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_user),
@@ -144,7 +142,7 @@ async def import_csv(
     job = create_job(session, current_user.id, "import", f"导入: {filename}")
     background_tasks.add_task(
         _bg_ai_import, job.id, current_user.id, deck_id, content, filename, category_id,
-        skip_ai=skip_ai,
+        allow_correction=allow_correction,
     )
     return {"job_id": job.id, "message": f"导入任务已提交，后台处理中"}
 
@@ -153,7 +151,7 @@ async def import_csv(
 async def import_json(
     deck_id: int,
     category_id: int | None = None,
-    skip_ai: bool = False,
+    allow_correction: bool = False,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_user),
@@ -164,7 +162,7 @@ async def import_json(
     job = create_job(session, current_user.id, "import", f"导入: {filename}")
     background_tasks.add_task(
         _bg_ai_import, job.id, current_user.id, deck_id, content, filename, category_id,
-        skip_ai=skip_ai,
+        allow_correction=allow_correction,
     )
     return {"job_id": job.id, "message": f"导入任务已提交，后台处理中"}
 
@@ -189,7 +187,7 @@ async def import_apkg(
 async def import_excel(
     deck_id: int,
     category_id: int | None = None,
-    skip_ai: bool = False,
+    allow_correction: bool = False,
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: User = Depends(get_current_user),
@@ -219,7 +217,7 @@ async def import_excel(
     job = create_job(session, current_user.id, "import", f"导入: {filename}")
     background_tasks.add_task(
         _bg_ai_import, job.id, current_user.id, deck_id, content_text, filename, category_id, file_bytes,
-        skip_ai=skip_ai,
+        allow_correction=allow_correction,
     )
     return {"job_id": job.id, "message": f"导入任务已提交，后台处理中"}
 

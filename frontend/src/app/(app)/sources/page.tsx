@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/lib/store";
 import { sources as sourcesApi } from "@/lib/api";
+import { formatDateTime } from "@/lib/timezone";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -395,7 +396,7 @@ export default function SourcesPage() {
                       )}
                       {source.last_fetched_at && (
                         <p className="text-[10px] text-muted-foreground mt-1">
-                          上次测试: {new Date(source.last_fetched_at).toLocaleString("zh-CN")}
+                          上次测试: {formatDateTime(source.last_fetched_at)}
                         </p>
                       )}
                     </div>

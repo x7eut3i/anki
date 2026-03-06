@@ -25,6 +25,7 @@ import {
   Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDateTime } from "@/lib/timezone";
 
 interface IngestionLog {
   id: number;
@@ -111,9 +112,11 @@ export default function IngestionPage() {
     setSaving(true);
     try {
       // Derive is_enabled from schedule_type
+      // Use user's timezone from settings for scheduling
       const payload = {
         ...config,
         is_enabled: (config.schedule_type || "off") !== "off",
+        timezone: user?.timezone || "Asia/Shanghai",
       };
       const updated = await ingestion.updateConfig(payload, token);
       setConfig(updated);
@@ -318,27 +321,6 @@ export default function IngestionPage() {
             {/* Other settings */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium">时区</label>
-                <select
-                  className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={config.timezone || "Asia/Shanghai"}
-                  onChange={(e) => setConfig({ ...config, timezone: e.target.value })}
-                >
-                  <option value="Asia/Shanghai">Asia/Shanghai (中国标准时间)</option>
-                  <option value="Asia/Hong_Kong">Asia/Hong_Kong (香港时间)</option>
-                  <option value="Asia/Taipei">Asia/Taipei (台北时间)</option>
-                  <option value="Asia/Tokyo">Asia/Tokyo (东京时间)</option>
-                  <option value="Asia/Singapore">Asia/Singapore (新加坡时间)</option>
-                  <option value="America/New_York">America/New_York (美东时间)</option>
-                  <option value="America/Los_Angeles">America/Los_Angeles (美西时间)</option>
-                  <option value="Europe/London">Europe/London (伦敦时间)</option>
-                  <option value="UTC">UTC (协调世界时)</option>
-                </select>
-                <p className="text-xs text-muted-foreground mt-1">
-                  定时抓取使用的时区
-                </p>
-              </div>
-              <div>
                 <label className="text-sm font-medium">质量阈值 (1-10)</label>
                 <Input
                   type="number"
@@ -463,10 +445,7 @@ export default function IngestionPage() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">
-                          {new Date(log.started_at).toLocaleString("zh-CN", { timeZone: log.timezone || "Asia/Shanghai" })}
-                          <span className="text-xs text-muted-foreground ml-1">
-                            ({log.timezone || "Asia/Shanghai"})
-                          </span>
+                          {formatDateTime(log.started_at)}
                         </span>
                         <Badge variant="outline" className="text-xs">
                           {log.run_type === "manual" ? "手动" : "定时"}

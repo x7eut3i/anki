@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useAuthStore } from "@/lib/store";
 import { jobs as jobsApi } from "@/lib/api";
+import { formatDateTime } from "@/lib/timezone";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -101,7 +102,7 @@ export default function JobsPage() {
 
   const formatTime = (dateStr: string | null) => {
     if (!dateStr) return "—";
-    return new Date(dateStr).toLocaleString("zh-CN");
+    return formatDateTime(dateStr);
   };
 
   if (loading) {

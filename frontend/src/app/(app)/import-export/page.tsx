@@ -29,7 +29,7 @@ export default function ImportExportPage() {
   const [resultType, setResultType] = useState<"success" | "error" | "info">("success");
   const [importing, setImporting] = useState(false);
   const [lastImportCount, setLastImportCount] = useState(0);
-  const [useAi, setUseAi] = useState(true);
+  const [allowCorrection, setAllowCorrection] = useState(false);
   const csvRef = useRef<HTMLInputElement>(null);
   const jsonRef = useRef<HTMLInputElement>(null);
   const excelRef = useRef<HTMLInputElement>(null);
@@ -60,7 +60,7 @@ export default function ImportExportPage() {
 
     try {
       const fn = type === "csv" ? importExport.importCSV : type === "json" ? importExport.importJSON : importExport.importExcel;
-      const data = await fn(selectedImportDeck, file, token, undefined, !useAi);
+      const data = await fn(selectedImportDeck, file, token, undefined, allowCorrection);
 
       // Handle async job response
       if (data.job_id) {
@@ -190,11 +190,11 @@ export default function ImportExportPage() {
             <label className="flex items-center gap-1.5 cursor-pointer text-sm select-none">
               <input
                 type="checkbox"
-                checked={useAi}
-                onChange={(e) => setUseAi(e.target.checked)}
+                checked={allowCorrection}
+                onChange={(e) => setAllowCorrection(e.target.checked)}
                 className="rounded border-input h-4 w-4 accent-primary"
               />
-              <span className="text-muted-foreground">AI 智能分析</span>
+              <span className="text-muted-foreground">允许AI修正内容</span>
             </label>
           </div>
           <div>
@@ -273,7 +273,7 @@ export default function ImportExportPage() {
           </div>
           <p className="text-xs text-muted-foreground mt-2">
             上传文件后 AI 自动分析内容并生成标准卡片，支持任意列名和自定义格式。
-            即使文件格式不标准，AI 也会自动识别、补充解析和干扰项。
+            勾选「允许AI修正内容」后，AI 会对已有内容进行修正优化；否则只做分析补全。
           </p>
 
           {/* Direct import (no AI) */}

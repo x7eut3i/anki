@@ -176,6 +176,7 @@ class QuizService:
                 "correct_answer": correct_display,
                 "user_answer": user_answer,
                 "explanation": card.explanation or card.back,
+                "source": card.source or "",
                 "pinyin": self._extract_pinyin(card),
             })
 
@@ -284,6 +285,7 @@ class QuizService:
             "choices": choices,
             "category_name": cat_name,
             "tags_list": tags_list or [],
+            "source": card.source or "",
             "time_limit": 0,
             "_correct_answer": correct_letter,
             "_correct_answer_display": card.back,
@@ -302,6 +304,7 @@ class QuizService:
             "choices": None,
             "category_name": cat_name,
             "tags_list": tags_list or [],
+            "source": card.source or "",
             "time_limit": 0,
         }
 

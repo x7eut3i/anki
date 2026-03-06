@@ -190,7 +190,7 @@ export default function CreateCardsPage() {
       if (useAI) {
         // Use async endpoint - AI completion + card creation in background
         const resp = await aiApi.completeCardsAsync(
-          { cards: cardsData, deck_id: selectedDeckId, category_id: catId },
+          { cards: cardsData, deck_id: selectedDeckId, category_id: catId, allow_correction: aiRefine },
           token
         );
         showToast(
@@ -427,7 +427,7 @@ export default function CreateCardsPage() {
                     className="rounded border-input h-4 w-4 accent-primary"
                   />
                   <Sparkles className="h-3.5 w-3.5 text-amber-500" />
-                  <span className="text-muted-foreground">AI 补充</span>
+                  <span className="text-muted-foreground">允许AI修正</span>
                 </label>
               )}
               {result && (

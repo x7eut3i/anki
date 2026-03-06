@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/lib/store";
 import { users as usersApi } from "@/lib/api";
+import { formatDateTime } from "@/lib/timezone";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -220,7 +221,7 @@ export default function UserManagementPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">{u.email}</p>
                     <p className="text-[10px] text-muted-foreground">
-                      创建于 {new Date(u.created_at).toLocaleString("zh-CN")}
+                      创建于 {formatDateTime(u.created_at)}
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">

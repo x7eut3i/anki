@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
+import { saveSortPreference, loadSortPreference } from "@/lib/sort-preferences";
 import { decks as deckApi, cards as cardApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +33,7 @@ import {
   fsrsStateLabel,
   parseJson,
 } from "@/components/card-detail";
+import { HighlightText } from "@/components/highlight-text";
 
 export default function DeckDetailPage() {
   const { token } = useAuthStore();
@@ -53,12 +55,17 @@ export default function DeckDetailPage() {
   // Sorting
   type SortKey = "default" | "front" | "created_at" | "state" | "reps";
   type SortDir = "asc" | "desc";
-  const [sortKey, setSortKey] = useState<SortKey>("default");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPreference("deck-detail", { sortKey: "default", sortDir: "asc" }).sortKey as SortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPreference("deck-detail", { sortKey: "default", sortDir: "asc" }).sortDir as SortDir);
 
   // Search & filter
   const [searchQuery, setSearchQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<string>("all");
+
+  // Persist sort preferences
+  useEffect(() => {
+    saveSortPreference("deck-detail", { sortKey, sortDir });
+  }, [sortKey, sortDir]);
 
   useEffect(() => {
     if (!token || !deckId) return;
@@ -262,27 +269,27 @@ export default function DeckDetailPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{cards.length}</div>
-            <p className="text-xs text-muted-foreground">总卡片数</p>
+          <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6">
+            <div className="text-xl sm:text-2xl font-bold">{cards.length}</div>
+            <p className="text-[10px] sm:text-xs text-muted-foreground">总卡片数</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">
+          <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6">
+            <div className="text-xl sm:text-2xl font-bold">
               {cards.filter((c) => c.state === 0).length}
             </div>
-            <p className="text-xs text-muted-foreground">新卡片</p>
+            <p className="text-[10px] sm:text-xs text-muted-foreground">新卡片</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">
+          <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6">
+            <div className="text-xl sm:text-2xl font-bold">
               {cards.filter((c) => new Date(c.due) <= new Date()).length}
             </div>
-            <p className="text-xs text-muted-foreground">待复习</p>
+            <p className="text-[10px] sm:text-xs text-muted-foreground">待复习</p>
           </CardContent>
         </Card>
       </div>
@@ -448,7 +455,7 @@ export default function DeckDetailPage() {
                             "font-medium text-sm",
                             isExpanded ? "" : "line-clamp-2"
                           )}>
-                            {card.front}
+                            <HighlightText text={card.front} query={searchQuery.trim()} />
                           </p>
                         </div>
                       </div>
@@ -480,7 +487,7 @@ export default function DeckDetailPage() {
                     {/* Expanded detail */}
                     {isExpanded && !batchMode && (
                       <div className="px-4 pb-4">
-                        <CardDetailPanel card={card} />
+                        <CardDetailPanel card={card} searchQuery={searchQuery.trim()} />
                         <CardTagManager cardId={card.id} token={token!} onTagsChange={(tags) => {
                           setCards((prev) => prev.map((c) => c.id === card.id ? { ...c, tags_list: tags } : c));
                         }} />

@@ -2,7 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
-import { tags as tagsApi } from "@/lib/api";
+import { tags as tagsApi, reading } from "@/lib/api";
+import { useAuthStore } from "@/lib/store";
+import { HighlightText } from "@/components/highlight-text";
+import { ExternalLink, BookOpen } from "lucide-react";
 
 /* ── Shared utilities for card display ── */
 
@@ -169,8 +172,54 @@ export function CardHeaderBadges({ card, highlightQuery }: { card: any; highligh
   );
 }
 
+/* ── Article Source Link (lazy-loaded from card.source URL) ── */
+export function ArticleSourceLink({ sourceUrl }: { sourceUrl: string }) {
+  const { token } = useAuthStore();
+  const [article, setArticle] = useState<{ id: number; title: string; quality_score: number; source_name: string } | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!token || !sourceUrl) return;
+    let cancelled = false;
+    reading.list({ source_url: sourceUrl, page_size: 1 }, token)
+      .then((res) => {
+        if (!cancelled && res.items && res.items.length > 0) {
+          const item = res.items[0];
+          setArticle({ id: item.id, title: item.title, quality_score: item.quality_score, source_name: item.source_name || "" });
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [sourceUrl, token]);
+
+  if (!loaded || !article) return null;
+
+  const parts: string[] = [article.title];
+  if (article.quality_score > 0) parts.push(`${article.quality_score}分`);
+  if (article.source_name) parts.push(article.source_name);
+  const label = parts[0] + (parts.length > 1 ? `（${parts.slice(1).join(" · ")}）` : "");
+
+  return (
+    <div className="bg-sky-50 dark:bg-sky-950/30 rounded-lg p-3">
+      <div className="text-xs font-semibold text-sky-700 dark:text-sky-400 mb-1 flex items-center gap-1">
+        <BookOpen className="h-3.5 w-3.5" /> 来源文章
+      </div>
+      <a
+        href={`/reading?article_id=${article.id}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sm text-sky-600 dark:text-sky-400 hover:underline inline-flex items-center gap-1"
+      >
+        📄 {label}
+        <ExternalLink className="h-3 w-3" />
+      </a>
+    </div>
+  );
+}
+
 /* ── Card Detail Panel (full back + explanation + knowledge etc.) ── */
-export function CardDetailPanel({ card }: { card: any }) {
+export function CardDetailPanel({ card, searchQuery }: { card: any; searchQuery?: string }) {
   const distractors: string[] = parseJson(card.distractors, []);
   const metaInfo = parseJson<Record<string, any> | null>(card.meta_info, null);
   const knowledge = metaInfo?.knowledge as Record<string, any> | undefined;
@@ -185,7 +234,7 @@ export function CardDetailPanel({ card }: { card: any }) {
         <div className="text-xs font-semibold text-green-700 dark:text-green-400 mb-1 flex items-center gap-1">
           ✅ 答案
         </div>
-        <div className="text-sm font-medium">{card.back}</div>
+        <div className="text-sm font-medium">{searchQuery ? <HighlightText text={card.back} query={searchQuery} /> : card.back}</div>
         {metaInfo?.pinyin && (
           <div className="mt-1 text-xs text-green-700/70 dark:text-green-300/70 italic">
             拼音：{metaInfo.pinyin}
@@ -220,7 +269,7 @@ export function CardDetailPanel({ card }: { card: any }) {
           <div className="text-xs font-semibold text-blue-700 dark:text-blue-400 mb-1 flex items-center gap-1">
             📖 解析
           </div>
-          <div className="text-sm leading-relaxed whitespace-pre-line">{card.explanation}</div>
+          <div className="text-sm leading-relaxed whitespace-pre-line">{searchQuery ? <HighlightText text={card.explanation} query={searchQuery} /> : card.explanation}</div>
         </div>
       )}
 
@@ -314,6 +363,9 @@ export function CardDetailPanel({ card }: { card: any }) {
           </div>
         </div>
       )}
+
+      {/* Article Source Link */}
+      {card.source && <ArticleSourceLink sourceUrl={card.source} />}
 
       {/* Source & metadata */}
       <div className="bg-gray-50 dark:bg-gray-900/30 rounded-lg p-3 space-y-1">

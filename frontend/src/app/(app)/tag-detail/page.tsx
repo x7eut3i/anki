@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
 import { tags as tagsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -17,14 +17,19 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
-  ExternalLink,
+  ArrowUp,
+  ArrowDown,
+  Search,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { saveSortPreference, loadSortPreference } from "@/lib/sort-preferences";
 import {
   CardDetailPanel,
   CardHeaderBadges,
 } from "@/components/card-detail";
+import { HighlightText } from "@/components/highlight-text";
+import { ArticleListItem } from "@/components/article-list-item";
 
 interface TagCard {
   id: number;
@@ -58,6 +63,7 @@ interface TagArticle {
 
 export default function TagDetailPage() {
   const { token } = useAuthStore();
+  const router = useRouter();
   const params = useSearchParams();
   const tagId = params.get("id");
   const tagName = params.get("name") || "";
@@ -73,6 +79,49 @@ export default function TagDetailPage() {
   // Card expand
   const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
   const [expandAll, setExpandAll] = useState(false);
+
+  // Sort, filter, search for cards
+  type SortKey = "default" | "front" | "created_at" | "deck_name";
+  type SortDir = "asc" | "desc";
+  const [sortKey, setSortKey] = useState<SortKey>(() => loadSortPreference("tag-detail", { sortKey: "default", sortDir: "asc" }).sortKey as SortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(() => loadSortPreference("tag-detail", { sortKey: "default", sortDir: "asc" }).sortDir as SortDir);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Persist sort preferences
+  useEffect(() => {
+    saveSortPreference("tag-detail", { sortKey, sortDir });
+  }, [sortKey, sortDir]);
+
+  // Filtered & sorted cards
+  const sortedCards = useMemo(() => {
+    let filtered = cards;
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(
+        (c) =>
+          (c.front || "").toLowerCase().includes(q) ||
+          (c.back || "").toLowerCase().includes(q) ||
+          (c.explanation || "").toLowerCase().includes(q)
+      );
+    }
+    if (sortKey === "default") return filtered;
+    const sorted = [...filtered].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "front":
+          cmp = (a.front || "").localeCompare(b.front || "", "zh-CN");
+          break;
+        case "created_at":
+          cmp = new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime();
+          break;
+        case "deck_name":
+          cmp = (a.deck_name || "").localeCompare(b.deck_name || "", "zh-CN");
+          break;
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+    return sorted;
+  }, [cards, sortKey, sortDir, searchQuery]);
 
   const loadDetail = useCallback(async () => {
     if (!token || !tagId) return;
@@ -168,7 +217,7 @@ export default function TagDetailPage() {
           文章 ({articles.length})
         </Button>
         {/* Quick actions */}
-        {cards.length > 0 && (
+        {activeTab === "cards" && cards.length > 0 && (
           <Link href={`/study?tag_ids=${tagId}`} className="ml-auto">
             <Button size="sm" variant="secondary">
               📖 基于此标签学习
@@ -189,22 +238,59 @@ export default function TagDetailPage() {
             </Card>
           ) : (
             <>
-              {/* Toolbar */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">
-                  共 {cards.length} 张卡片
-                </span>
-                <Button variant="ghost" size="sm" onClick={toggleExpandAll}>
-                  {expandAll ? (
-                    <><EyeOff className="mr-1 h-4 w-4" /> 收起全部</>
-                  ) : (
-                    <><Eye className="mr-1 h-4 w-4" /> 展开全部</>
+              {/* Toolbar: search, sort, expand */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-sm text-muted-foreground">
+                    共 {sortedCards.length}/{cards.length} 张卡片
+                  </span>
+                  <Button variant="ghost" size="sm" onClick={toggleExpandAll}>
+                    {expandAll ? (
+                      <><EyeOff className="mr-1 h-4 w-4" /> 收起全部</>
+                    ) : (
+                      <><Eye className="mr-1 h-4 w-4" /> 展开全部</>
+                    )}
+                  </Button>
+                </div>
+
+                {/* Search & sort bar */}
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="relative flex-1 min-w-[180px]">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="搜索卡片内容..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full h-9 pl-8 pr-3 rounded-md border border-input bg-background text-sm"
+                    />
+                  </div>
+                  <select
+                    value={sortKey}
+                    onChange={(e) => setSortKey(e.target.value as SortKey)}
+                    className="h-9 px-3 rounded-md border border-input bg-background text-sm"
+                  >
+                    <option value="default">默认排序</option>
+                    <option value="front">题面</option>
+                    <option value="created_at">创建时间</option>
+                    <option value="deck_name">所属牌组</option>
+                  </select>
+                  {sortKey !== "default" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 px-2"
+                      onClick={() => setSortDir(sortDir === "asc" ? "desc" : "asc")}
+                      title={sortDir === "asc" ? "切换为降序" : "切换为升序"}
+                    >
+                      {sortDir === "asc" ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+                    </Button>
                   )}
-                </Button>
+                </div>
               </div>
 
               {/* Card list */}
-              {cards.map((card) => {
+              {sortedCards.map((card) => {
                 const isExpanded = expandedCards.has(card.id);
                 return (
                   <div
@@ -224,7 +310,7 @@ export default function TagDetailPage() {
                           "font-medium text-sm mt-1",
                           isExpanded ? "" : "line-clamp-2"
                         )}>
-                          {card.front}
+                          <HighlightText text={card.front} query={searchQuery.trim()} />
                         </p>
                       </div>
                       <div className="flex gap-1 ml-2 items-center">
@@ -237,7 +323,7 @@ export default function TagDetailPage() {
                     </div>
                     {isExpanded && (
                       <div className="px-4 pb-4">
-                        <CardDetailPanel card={card} />
+                        <CardDetailPanel card={card} searchQuery={searchQuery.trim()} />
                       </div>
                     )}
                   </div>
@@ -260,48 +346,11 @@ export default function TagDetailPage() {
             </Card>
           ) : (
             articles.map((article) => (
-              <Link
+              <ArticleListItem
                 key={article.id}
-                href={`/reading?article_id=${article.id}`}
-                prefetch={true}
-              >
-                <Card className="overflow-hidden hover:border-primary/40 transition-colors cursor-pointer">
-                  <div className="flex items-center justify-between p-4">
-                    <div className="space-y-1 min-w-0 flex-1">
-                      <div className="font-medium text-sm line-clamp-2">
-                        {article.title}
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                        {article.source_name && <span>{article.source_name}</span>}
-                        {article.word_count > 0 && <span>· {article.word_count}字</span>}
-                        {article.created_at && (
-                          <span>· {new Date(article.created_at).toLocaleDateString("zh-CN")}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                      {article.quality_score > 0 && (
-                        <Badge variant="secondary" className="text-xs">
-                          质量 {article.quality_score}
-                        </Badge>
-                      )}
-                      {article.source_url && (
-                        <span
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            window.open(article.source_url, "_blank");
-                          }}
-                          className="text-muted-foreground hover:text-primary"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </span>
-                      )}
-                      <BookOpen className="h-4 w-4 text-muted-foreground" />
-                    </div>
-                  </div>
-                </Card>
-              </Link>
+                article={article}
+                onClick={() => router.push(`/reading?article_id=${article.id}`)}
+              />
             ))
           )}
         </div>

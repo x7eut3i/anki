@@ -137,30 +137,36 @@ def list_ingestion_logs(
     'error' (interrupted), since the pipeline must have crashed or
     the server restarted.
     """
-    # Fix stale running logs
+    # Fix stale running logs — use updated_at (last activity) instead of started_at
     stale_cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(minutes=30)
     stale_logs = session.exec(
         select(IngestionLog)
         .where(IngestionLog.status == "running")
-        .where(IngestionLog.started_at < stale_cutoff)
+        .where(IngestionLog.updated_at < stale_cutoff)
     ).all()
-    for sl in stale_logs:
-        sl.status = "error"
-        sl.finished_at = sl.finished_at or datetime.now(timezone.utc)
-        # Append an entry to the log detail
-        try:
-            entries = json.loads(sl.log_detail) if sl.log_detail else []
-        except (json.JSONDecodeError, TypeError):
-            entries = []
-        entries.append({
-            "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-            "level": "error",
-            "source": "系统",
-            "message": "任务运行超时或服务器中断，已自动标记为错误",
-        })
-        sl.log_detail = json.dumps(entries, ensure_ascii=False)
-        session.add(sl)
     if stale_logs:
+        # Resolve configured timezone for log entry timestamps
+        cfg = session.exec(select(IngestionConfig)).first()
+        try:
+            _stale_tz = ZoneInfo((cfg.timezone if cfg else None) or "Asia/Shanghai")
+        except Exception:
+            _stale_tz = ZoneInfo("Asia/Shanghai")
+        for sl in stale_logs:
+            sl.status = "error"
+            sl.finished_at = sl.finished_at or datetime.now(timezone.utc)
+            # Append an entry to the log detail
+            try:
+                entries = json.loads(sl.log_detail) if sl.log_detail else []
+            except (json.JSONDecodeError, TypeError):
+                entries = []
+            entries.append({
+                "time": datetime.now(_stale_tz).strftime("%H:%M:%S"),
+                "level": "error",
+                "source": "系统",
+                "message": "任务运行超时或服务器中断，已自动标记为错误",
+            })
+            sl.log_detail = json.dumps(entries, ensure_ascii=False)
+            session.add(sl)
         session.commit()
 
     logs = session.exec(
@@ -310,6 +316,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                     add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")
                     log.status = "error"
                     log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
                     log.log_detail = json.dumps(entries, ensure_ascii=False)
                     session.add(log)
                     session.commit()
@@ -399,6 +406,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                     add_entry("warn", "系统", "⚠️ 用户取消了抓取任务")
                     log.status = "cancelled"
                     log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
                     log.log_detail = json.dumps(entries, ensure_ascii=False)
                     session.add(log)
                     session.commit()
@@ -409,6 +417,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
 
                 # Persist fetched count immediately so the UI shows it
                 log.articles_fetched = total_fetched
+                log.updated_at = datetime.now(timezone.utc)
                 log.log_detail = json.dumps(entries, ensure_ascii=False)
                 session.add(log)
                 session.commit()
@@ -582,6 +591,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 log.articles_skipped = total_skipped
                                 log.cards_created = total_cards
                                 log.errors_count = total_errors
+                                log.updated_at = datetime.now(timezone.utc)
                                 log.log_detail = json.dumps(entries, ensure_ascii=False)
                                 session.add(log)
                                 session.commit()
@@ -612,6 +622,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                 log.status = "error"
 
             log.finished_at = datetime.now(timezone.utc)
+            log.updated_at = datetime.now(timezone.utc)
             log.log_detail = json.dumps(entries, ensure_ascii=False)
             session.add(log)
             session.commit()

@@ -23,6 +23,7 @@ class UserResponse(BaseModel):
     session_card_limit: int
     desired_retention: float
     ai_import_batch_size: int
+    timezone: str
 
     model_config = {"from_attributes": True}
 
@@ -34,6 +35,7 @@ class UserUpdate(BaseModel):
     session_card_limit: int | None = None
     desired_retention: float | None = None
     ai_import_batch_size: int | None = None
+    timezone: str | None = None
 
 
 class TokenResponse(BaseModel):

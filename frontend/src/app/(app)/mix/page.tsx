@@ -267,7 +267,7 @@ export default function MixPage() {
               return (
                 <button
                   key={cat.id}
-                  className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm ${
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm min-w-0 ${
                     selected
                       ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 ring-1 ring-blue-500"
                       : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
@@ -301,7 +301,7 @@ export default function MixPage() {
                 return (
                   <button
                     key={deck.id}
-                    className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm ${
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm min-w-0 ${
                       selected
                         ? "border-purple-500 bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 ring-1 ring-purple-500"
                         : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 border-dashed"

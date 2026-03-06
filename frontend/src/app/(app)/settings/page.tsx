@@ -6,7 +6,28 @@ import { auth } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Settings, User, Shield, LogOut } from "lucide-react";
+import { Settings, User, Shield, LogOut, Globe } from "lucide-react";
+
+const TIMEZONE_OPTIONS = [
+  { value: "Asia/Shanghai", label: "中国标准时间 (UTC+8)" },
+  { value: "Asia/Tokyo", label: "日本标准时间 (UTC+9)" },
+  { value: "Asia/Seoul", label: "韩国标准时间 (UTC+9)" },
+  { value: "Asia/Singapore", label: "新加坡时间 (UTC+8)" },
+  { value: "Asia/Hong_Kong", label: "香港时间 (UTC+8)" },
+  { value: "Asia/Taipei", label: "台北时间 (UTC+8)" },
+  { value: "Asia/Kolkata", label: "印度标准时间 (UTC+5:30)" },
+  { value: "Asia/Dubai", label: "海湾标准时间 (UTC+4)" },
+  { value: "Europe/London", label: "英国时间 (UTC+0/+1)" },
+  { value: "Europe/Paris", label: "欧洲中部时间 (UTC+1/+2)" },
+  { value: "Europe/Moscow", label: "莫斯科时间 (UTC+3)" },
+  { value: "America/New_York", label: "美国东部时间 (UTC-5/-4)" },
+  { value: "America/Chicago", label: "美国中部时间 (UTC-6/-5)" },
+  { value: "America/Denver", label: "美国山地时间 (UTC-7/-6)" },
+  { value: "America/Los_Angeles", label: "美国太平洋时间 (UTC-8/-7)" },
+  { value: "Australia/Sydney", label: "澳大利亚东部时间 (UTC+10/+11)" },
+  { value: "Pacific/Auckland", label: "新西兰时间 (UTC+12/+13)" },
+  { value: "UTC", label: "协调世界时 (UTC)" },
+];
 
 export default function SettingsPage() {
   const { token, user, setAuth, logout } = useAuthStore();
@@ -14,6 +35,7 @@ export default function SettingsPage() {
   const [dailyGoal, setDailyGoal] = useState(50);
   const [desiredRetention, setDesiredRetention] = useState(0.9);
   const [sessionLimit, setSessionLimit] = useState(50);
+  const [userTimezone, setUserTimezone] = useState("Asia/Shanghai");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
@@ -24,6 +46,7 @@ export default function SettingsPage() {
       setDailyGoal(data.daily_new_card_limit || 50);
       setDesiredRetention(data.desired_retention || 0.9);
       setSessionLimit(data.session_card_limit || 50);
+      setUserTimezone(data.timezone || "Asia/Shanghai");
     });
   }, [token]);
 
@@ -43,11 +66,14 @@ export default function SettingsPage() {
           daily_new_card_limit: dailyGoal,
           desired_retention: desiredRetention,
           session_card_limit: sessionLimit,
+          timezone: userTimezone,
         }),
       });
       if (res.ok) {
         const updated = await res.json();
         setProfile(updated);
+        // Save timezone to localStorage for frontend date formatting
+        localStorage.setItem("user_timezone", userTimezone);
         setSaveMsg("设置已保存");
       } else {
         setSaveMsg("保存失败");
@@ -87,6 +113,35 @@ export default function SettingsPage() {
           <div>
             <label className="text-sm font-medium">邮箱</label>
             <Input value={profile?.email || ""} disabled />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Timezone */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            时区设置
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">显示时区</label>
+            <select
+              value={userTimezone}
+              onChange={(e) => setUserTimezone(e.target.value)}
+              className="w-full mt-1 p-2 rounded-md border border-input bg-background text-sm"
+            >
+              {TIMEZONE_OPTIONS.map((tz) => (
+                <option key={tz.value} value={tz.value}>
+                  {tz.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              所有时间显示（卡片、文章、日志等）将使用此时区
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Eye, BookOpen, Lightbulb } from "lucide-react";
-import { isHiddenTag } from "@/components/card-detail";
+import { isHiddenTag, ArticleSourceLink } from "@/components/card-detail";
 
 interface FlashcardProps {
   card: {
@@ -15,6 +15,7 @@ interface FlashcardProps {
     explanation?: string;
     distractors?: string;  // JSON string: ["wrong1","wrong2","wrong3"]
     meta_info?: string;    // JSON string with extended knowledge
+    source?: string;
     category_name?: string;
     tags_list?: { id: number; name: string; color: string }[];
   };
@@ -266,6 +267,9 @@ export default function Flashcard({
 
           {/* Extended knowledge from meta_info */}
           {metaInfo && <MetaInfoPanel meta={metaInfo} />}
+
+          {/* Article Source Link */}
+          {card.source && <ArticleSourceLink sourceUrl={card.source} />}
         </div>
       )}
 

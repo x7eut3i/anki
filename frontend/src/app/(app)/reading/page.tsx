@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
+import { saveSortPreference, loadSortPreference } from "@/lib/sort-preferences";
 import { reading, ai, cards as cardsApi, categories as catApi, tags as tagsApi } from "@/lib/api";
 import { MarkdownContent } from "@/components/markdown-content";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
+import { formatDateTime } from "@/lib/timezone";
 import { CardDetailPanel, CardTagManager, isHiddenTag } from "@/components/card-detail";
 
 /* ── Clean excess blank lines while preserving paragraph spacing ── */
@@ -151,6 +153,30 @@ function AnnotatedText({
   const [activePopup, setActivePopup] = useState<number | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
+  // Reposition popup to stay within viewport
+  useEffect(() => {
+    if (activePopup === null || !popupRef.current) return;
+    const el = popupRef.current;
+    const rect = el.getBoundingClientRect();
+    // Fix right overflow
+    if (rect.right > window.innerWidth - 8) {
+      el.style.left = "auto";
+      el.style.right = "0";
+    }
+    // Fix left overflow
+    if (rect.left < 8) {
+      el.style.left = "0";
+      el.style.right = "auto";
+    }
+    // Fix bottom overflow — show above instead
+    if (rect.bottom > window.innerHeight - 8) {
+      el.style.top = "auto";
+      el.style.bottom = "100%";
+      el.style.marginBottom = "4px";
+      el.style.marginTop = "0";
+    }
+  }, [activePopup]);
+
   // Close popup on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -234,7 +260,7 @@ function AnnotatedText({
             {isActive && (
               <span
                 ref={popupRef}
-                className="absolute z-50 left-0 top-full mt-1 w-80 bg-card border rounded-xl shadow-xl p-4 text-sm animate-in fade-in slide-in-from-top-2 duration-200"
+                className="absolute z-50 left-0 top-full mt-1 w-[min(20rem,calc(100vw-2rem))] bg-card border rounded-xl shadow-xl p-4 text-sm animate-in fade-in slide-in-from-top-2 duration-200"
                 style={{ borderTopColor: color, borderTopWidth: 3 }}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -662,8 +688,13 @@ export default function ReadingPage() {
   const [batchReanalyzing, setBatchReanalyzing] = useState(false);
 
   // Sorting
-  const [sortBy, setSortBy] = useState<string>("created_at");
-  const [sortDir, setSortDir] = useState<string>("desc");
+  const [sortBy, setSortBy] = useState<string>(() => loadSortPreference("reading", { sortKey: "created_at", sortDir: "desc" }).sortKey);
+  const [sortDir, setSortDir] = useState<string>(() => loadSortPreference("reading", { sortKey: "created_at", sortDir: "desc" }).sortDir);
+
+  // Persist sort preferences
+  useEffect(() => {
+    saveSortPreference("reading", { sortKey: sortBy, sortDir: sortDir as "asc" | "desc" });
+  }, [sortBy, sortDir]);
 
   // Detail view
   const [detail, setDetail] = useState<AnalysisDetail | null>(null);
@@ -1443,7 +1474,7 @@ export default function ReadingPage() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <BookMarked className="h-6 w-6" /> 文章精读
@@ -1452,8 +1483,8 @@ export default function ReadingPage() {
             AI驱动的时政文章深度阅读分析 · 共 {total} 篇
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={async () => {
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={async () => {
             if (!token) return;
             try {
               const res = await reading.batchArchive(7, token);
@@ -1465,9 +1496,12 @@ export default function ReadingPage() {
               }
             } catch { /* ignore */ }
           }}>
-            <Archive className="h-4 w-4 mr-1" /> 自动归档
+            <Archive className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">自动归档</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={async () => {
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4 sm:mr-1" /> <span className="hidden sm:inline">添加文章</span>
+          </Button>
+          <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={async () => {
             if (!token) return;
             try {
               const res = await reading.exportArticles(token);
@@ -1481,9 +1515,9 @@ export default function ReadingPage() {
               URL.revokeObjectURL(url);
             } catch { showToast("导出失败", "error"); }
           }}>
-            📥 导出文章
+            📥 <span className="hidden sm:inline">导出文章</span>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => {
+          <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={() => {
             const input = document.createElement("input");
             input.type = "file";
             input.accept = ".json";
@@ -1498,10 +1532,7 @@ export default function ReadingPage() {
             };
             input.click();
           }}>
-            📤 导入文章
-          </Button>
-          <Button onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4 mr-1" /> 添加文章
+            📤 <span className="hidden sm:inline">导入文章</span>
           </Button>
         </div>
       </div>
@@ -1804,7 +1835,7 @@ export default function ReadingPage() {
                       {item.source_name && <span>{item.source_name}</span>}
                       {item.publish_date && <span>{item.publish_date}</span>}
                       <span>{item.word_count} 字</span>
-                      <span>{new Date(item.created_at).toLocaleDateString()}</span>
+                      <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
                     {/* Article tags */}
                     {item.tags_list && item.tags_list.length > 0 && (
@@ -1822,6 +1853,17 @@ export default function ReadingPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {item.source_url && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8"
+                        onClick={(e) => { e.stopPropagation(); window.open(item.source_url, "_blank"); }}
+                        title="打开原文链接"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"
