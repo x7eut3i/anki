@@ -60,6 +60,42 @@ async def _ai_call_with_retry(
     raise last_error  # type: ignore[misc]
 
 
+def _extract_ai_content(result: dict) -> str:
+    """Extract the content string from an AI API response.
+
+    Validates that the response has the expected OpenAI-compatible structure.
+    Raises ValueError with a descriptive message if the response is malformed.
+    """
+    if "choices" not in result:
+        # Try to extract a meaningful error from the response
+        err_msg = ""
+        if "error" in result:
+            err_obj = result["error"]
+            if isinstance(err_obj, dict):
+                err_msg = err_obj.get("message", "") or err_obj.get("code", "")
+            else:
+                err_msg = str(err_obj)
+        if not err_msg:
+            # Show first 200 chars of the response for debugging
+            err_msg = f"unexpected response: {str(result)}"
+        raise ValueError(f"AI API 未返回 choices: {err_msg}")
+
+    choices = result["choices"]
+    if not choices or not isinstance(choices, list):
+        raise ValueError("AI API 返回了空的 choices 列表")
+
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if content is None:
+        # Check for refusal / content_filter
+        finish = choices[0].get("finish_reason", "")
+        if finish == "content_filter":
+            raise ValueError("AI API 内容被过滤 (content_filter)")
+        raise ValueError(f"AI API 返回的 message 无 content (finish_reason={finish})")
+
+    return content
+
+
 async def ai_cleanup_content(
     config,
     title: str,
@@ -110,7 +146,7 @@ async def ai_cleanup_content(
             feature="content_cleanup",
         )
         elapsed_ms = int((time.time() - t0) * 1000)
-        cleaned = result["choices"][0]["message"]["content"].strip()
+        cleaned = _extract_ai_content(result).strip()
         tokens_used = result.get("usage", {}).get("total_tokens", 0)
         log_ai_response("content_cleanup", cleanup_model, cleaned, tokens_used, elapsed_ms)
         log_ai_call_to_db(
@@ -174,7 +210,7 @@ async def ai_analyze_article(
                 feature="article_analysis",
             )
             elapsed_ms = int((time.time() - t0) * 1000)
-            content_text = result["choices"][0]["message"]["content"]
+            content_text = _extract_ai_content(result)
             tokens_used = result.get("usage", {}).get("total_tokens", 0)
 
             log_ai_response("article_analysis", model, content_text,
@@ -270,7 +306,7 @@ async def ai_generate_cards(
                 feature="card_generation",
             )
             elapsed_ms = int((time.time() - t0) * 1000)
-            content_text = result["choices"][0]["message"]["content"].strip()
+            content_text = _extract_ai_content(result).strip()
             tokens_used = result.get("usage", {}).get("total_tokens", 0)
 
             log_ai_response("card_generation", model, content_text,
