@@ -8,6 +8,7 @@ import asyncio
 import logging
 import random
 import re
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
@@ -228,7 +229,7 @@ async def crawl_rmrb_range(
     start_date: datetime,
     end_date: datetime,
     *,
-    progress_callback: callable | None = None,
+    progress_callback: Callable | None = None,
 ) -> list[dict]:
     """Crawl 人民日报 for a date range (inclusive).
 
