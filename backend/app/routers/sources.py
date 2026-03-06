@@ -61,32 +61,56 @@ def list_sources(
     session: Session = Depends(get_session),
 ):
     """List all article sources (shared across users)."""
-    sources = session.exec(
-        select(ArticleSource).order_by(
-            ArticleSource.is_system.desc(),  # system sources first
-            ArticleSource.created_at,
-        )
-    ).all()
+    try:
+        sources = session.exec(
+            select(ArticleSource).order_by(
+                ArticleSource.is_system.desc(),  # system sources first
+                ArticleSource.created_at,
+            )
+        ).all()
 
-    # If no sources exist, seed from system + normal defaults
-    if not sources:
-        from app.services.source_crawlers import SYSTEM_SOURCES, NORMAL_SOURCES
+        # If no sources exist, seed from system + normal defaults
+        if not sources:
+            from app.services.source_crawlers import SYSTEM_SOURCES, NORMAL_SOURCES
+            for s in SYSTEM_SOURCES:
+                source = ArticleSource(
+                    name=s["name"], url=s["url"],
+                    source_type=s.get("type", "special"),
+                    category=s.get("category", "时政热点"),
+                    is_system=True,
+                    description=s.get("description", ""),
+                )
+                session.add(source)
+            for s in NORMAL_SOURCES:
+                source = ArticleSource(
+                    name=s["name"], url=s["url"],
+                    source_type=s.get("type", "html"),
+                    category=s.get("category", "时政热点"),
+                    is_system=False,
+                    description=s.get("description", ""),
+                )
+                session.add(source)
+            session.commit()
+            sources = session.exec(
+                select(ArticleSource).order_by(
+                    ArticleSource.is_system.desc(),
+                    ArticleSource.created_at,
+                )
+            ).all()
+
+        # Ensure system sources exist (in case DB was migrated from old schema)
+        existing_names = {s.name for s in sources}
+        from app.services.source_crawlers import SYSTEM_SOURCES
         for s in SYSTEM_SOURCES:
-            source = ArticleSource(
-                name=s["name"], url=s["url"],
-                source_type=s.get("type", "special"),
-                category=s.get("category", "时政热点"),
-                is_system=True,
-            )
-            session.add(source)
-        for s in NORMAL_SOURCES:
-            source = ArticleSource(
-                name=s["name"], url=s["url"],
-                source_type=s.get("type", "html"),
-                category=s.get("category", "时政热点"),
-                is_system=False,
-            )
-            session.add(source)
+            if s["name"] not in existing_names:
+                source = ArticleSource(
+                    name=s["name"], url=s["url"],
+                    source_type=s.get("type", "special"),
+                    category=s.get("category", "时政热点"),
+                    is_system=True,
+                    description=s.get("description", ""),
+                )
+                session.add(source)
         session.commit()
         sources = session.exec(
             select(ArticleSource).order_by(
@@ -95,27 +119,12 @@ def list_sources(
             )
         ).all()
 
-    # Ensure system sources exist (in case DB was migrated from old schema)
-    existing_names = {s.name for s in sources}
-    from app.services.source_crawlers import SYSTEM_SOURCES
-    for s in SYSTEM_SOURCES:
-        if s["name"] not in existing_names:
-            source = ArticleSource(
-                name=s["name"], url=s["url"],
-                source_type=s.get("type", "special"),
-                category=s.get("category", "时政热点"),
-                is_system=True,
-            )
-            session.add(source)
-    session.commit()
-    sources = session.exec(
-        select(ArticleSource).order_by(
-            ArticleSource.is_system.desc(),
-            ArticleSource.created_at,
-        )
-    ).all()
-
-    return [SourceResponse.model_validate(s) for s in sources]
+        return [SourceResponse.model_validate(s) for s in sources]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to list sources: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取来源列表失败: {str(e)[:200]}")
 
 
 @router.post("", response_model=SourceResponse, status_code=201)
@@ -188,38 +197,47 @@ def reset_sources_to_defaults(
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
 
-    # Delete all existing sources
-    existing = session.exec(select(ArticleSource)).all()
-    for s in existing:
-        session.delete(s)
-    session.commit()
+    try:
+        # Delete all existing sources
+        existing = session.exec(select(ArticleSource)).all()
+        for s in existing:
+            session.delete(s)
+        session.commit()
 
-    # Re-seed from system + normal sources
-    from app.services.source_crawlers import SYSTEM_SOURCES, NORMAL_SOURCES
-    for s in SYSTEM_SOURCES:
-        source = ArticleSource(
-            name=s["name"], url=s["url"],
-            source_type=s.get("type", "special"),
-            category=s.get("category", "时政热点"),
-            is_system=True,
-        )
-        session.add(source)
-    for s in NORMAL_SOURCES:
-        source = ArticleSource(
-            name=s["name"], url=s["url"],
-            source_type=s.get("type", "html"),
-            category=s.get("category", "时政热点"),
-            is_system=False,
-        )
-        session.add(source)
-    session.commit()
+        # Re-seed from system + normal sources
+        from app.services.source_crawlers import SYSTEM_SOURCES, NORMAL_SOURCES
+        for s in SYSTEM_SOURCES:
+            source = ArticleSource(
+                name=s["name"], url=s["url"],
+                source_type=s.get("type", "special"),
+                category=s.get("category", "时政热点"),
+                is_system=True,
+                description=s.get("description", ""),
+            )
+            session.add(source)
+        for s in NORMAL_SOURCES:
+            source = ArticleSource(
+                name=s["name"], url=s["url"],
+                source_type=s.get("type", "html"),
+                category=s.get("category", "时政热点"),
+                is_system=False,
+                description=s.get("description", ""),
+            )
+            session.add(source)
+        session.commit()
 
-    sources = session.exec(select(ArticleSource).order_by(ArticleSource.created_at)).all()
-    return {
-        "ok": True,
-        "count": len(sources),
-        "sources": [SourceResponse.model_validate(s) for s in sources],
-    }
+        sources = session.exec(select(ArticleSource).order_by(ArticleSource.created_at)).all()
+        logger.info("Reset-defaults: re-seeded %d sources", len(sources))
+        return {
+            "ok": True,
+            "count": len(sources),
+            "sources": [SourceResponse.model_validate(s) for s in sources],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to reset sources to defaults: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"恢复默认来源失败: {str(e)[:200]}")
 
 
 @router.post("/{source_id}/test")

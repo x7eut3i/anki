@@ -57,6 +57,7 @@ export default function SourcesPage() {
   const { token } = useAuthStore();
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [testing, setTesting] = useState<number | null>(null);
@@ -82,11 +83,13 @@ export default function SourcesPage() {
   const fetchSources = async () => {
     if (!token) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await sourcesApi.list(token);
       setSources(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to load sources:", err);
+      setLoadError(err.message || "加载来源列表失败");
     } finally {
       setLoading(false);
     }
@@ -412,6 +415,20 @@ export default function SourcesPage() {
         <div className="flex justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <Card>
+          <CardContent className="py-8 text-center space-y-3">
+            <div className="flex items-center justify-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5" />
+              <span className="font-medium">加载失败</span>
+            </div>
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button variant="outline" size="sm" onClick={fetchSources}>
+              <RefreshCw className="h-4 w-4 mr-1" />
+              重试
+            </Button>
+          </CardContent>
+        </Card>
       ) : sources.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
