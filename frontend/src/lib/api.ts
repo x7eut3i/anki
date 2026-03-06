@@ -476,6 +476,15 @@ export const sources = {
 
   resetDefaults: (token: string) =>
     request<any>("/api/sources/reset-defaults", { method: "POST", token }),
+
+  backfill: (data: { start_date: string; end_date: string }, token: string) =>
+    request<any>("/api/sources/rmrb-backfill", { method: "POST", body: JSON.stringify(data), token }),
+
+  qiushiIssues: (year: number, token: string) =>
+    request<{ year: number; issues: { issue: number; text: string; url: string }[] }>(`/api/sources/qiushi-issues?year=${year}`, { token }),
+
+  qiushiBackfill: (data: { issue_url: string; issue_name: string }, token: string) =>
+    request<any>("/api/sources/qiushi-backfill", { method: "POST", body: JSON.stringify(data), token }),
 };
 
 // ---------------------------------------------------------------------------

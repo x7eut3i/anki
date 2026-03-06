@@ -448,7 +448,7 @@ export default function IngestionPage() {
                           {formatDateTime(log.started_at)}
                         </span>
                         <Badge variant="outline" className="text-xs">
-                          {log.run_type === "manual" ? "手动" : "定时"}
+                          {log.run_type === "manual" ? "手动" : log.run_type === "backfill" ? "回溯" : "定时"}
                         </Badge>
                         {log.status === "cancelled" && (
                           <Badge variant="secondary" className="text-xs text-amber-600">

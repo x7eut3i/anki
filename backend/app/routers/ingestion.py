@@ -633,6 +633,672 @@ async def _run_pipeline_internal(run_type: str = "manual"):
         _running_lock.release()
 
 
+async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
+    """Run RMRB backfill pipeline as a background task.
+
+    Similar to _run_pipeline_internal but scoped to RMRB date range only.
+    Reuses the same singleton lock, log entry, and article processing logic.
+    """
+    global _running_log_id, _cancel_requested
+
+    from sqlmodel import Session as SyncSession
+    from app.database import engine as db_engine
+    from app.models.article_analysis import ArticleAnalysis
+    from app.models.ai_config import AIConfig
+    from app.models.user import User
+    from app.services.source_crawlers import crawl_rmrb_range, fetch_and_extract_url
+
+    acquired = _running_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("RMRB backfill skipped: another job is already running")
+        return
+
+    try:
+        _cancel_requested = False
+
+        with SyncSession(db_engine) as session:
+            cfg = session.exec(select(IngestionConfig)).first()
+            if not cfg:
+                cfg = IngestionConfig()
+                session.add(cfg)
+                session.commit()
+                session.refresh(cfg)
+
+            log = IngestionLog(
+                run_type="backfill",
+                status="running",
+            )
+            session.add(log)
+            session.commit()
+            session.refresh(log)
+            _running_log_id = log.id
+
+            entries: list[dict] = []
+
+            try:
+                _tz = ZoneInfo(cfg.timezone or "Asia/Shanghai")
+            except Exception:
+                _tz = ZoneInfo("Asia/Shanghai")
+
+            def add_entry(level: str, source: str, message: str):
+                entries.append({
+                    "time": datetime.now(_tz).strftime("%H:%M:%S"),
+                    "level": level,
+                    "source": source,
+                    "message": message,
+                })
+
+            try:
+                # Check AI availability
+                config = session.exec(
+                    select(AIConfig).where(AIConfig.is_enabled == True)
+                ).first()
+                if not config or not config.api_key:
+                    add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")
+                    log.status = "error"
+                    log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    session.add(log)
+                    session.commit()
+                    return
+
+                _max_retries = getattr(config, "max_retries", 3) or 3
+
+                # Collect dedup URLs
+                analyzed_urls = set()
+                existing_analyses = session.exec(
+                    select(ArticleAnalysis.source_url).where(ArticleAnalysis.source_url != "")
+                ).all()
+                for url in existing_analyses:
+                    if url:
+                        analyzed_urls.add(url.strip())
+
+                # Load rejected URL cache
+                _cache_rows = session.exec(select(IngestionUrlCache)).all()
+                url_score_cache: dict[str, float] = {r.url: r.quality_score for r in _cache_rows}
+
+                import re
+                import time as _time
+
+                total_fetched = 0
+                total_analyzed = 0
+                total_skipped = 0
+                total_cards = 0
+                total_errors = 0
+
+                # ═══ Phase 1: Crawl RMRB for date range ═══
+                add_entry("info", "人民日报", f"开始回溯抓取: {start_date_str} → {end_date_str}")
+
+                start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+
+                async def _progress_cb(date_str: str, count: int):
+                    if _cancel_requested:
+                        return
+                    if count < 0:
+                        add_entry("warn", "人民日报", f"{date_str}: 抓取失败")
+                    elif count == 0:
+                        add_entry("info", "人民日报", f"{date_str}: 无文章（可能是休刊日）")
+                    else:
+                        add_entry("info", "人民日报", f"{date_str}: 发现 {count} 篇新文章")
+                    # Flush progress
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    log.updated_at = datetime.now(timezone.utc)
+                    session.add(log)
+                    session.commit()
+
+                all_articles = await crawl_rmrb_range(
+                    start_dt, end_dt, progress_callback=_progress_cb,
+                )
+
+                if _cancel_requested:
+                    add_entry("warn", "系统", "⚠️ 用户取消了回溯任务")
+                    log.status = "cancelled"
+                    log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    session.add(log)
+                    session.commit()
+                    return
+
+                # Tag all articles with source info
+                for art in all_articles:
+                    art["source_name"] = "人民日报"
+                    art["category"] = "时政热点"
+
+                total_fetched = len(all_articles)
+                add_entry("info", "人民日报", f"回溯完成，共发现 {total_fetched} 篇文章，开始逐篇处理...")
+
+                log.articles_fetched = total_fetched
+                log.sources_processed = 1
+                log.updated_at = datetime.now(timezone.utc)
+                log.log_detail = json.dumps(entries, ensure_ascii=False)
+                session.add(log)
+                session.commit()
+
+                # ═══ Phase 2: Process each article ═══
+                admin_user = session.exec(select(User).where(User.is_admin == True)).first()
+                if not admin_user:
+                    admin_user = session.exec(select(User)).first()
+
+                concurrency = getattr(cfg, "concurrency", 3) or 3
+                sem = _asyncio.Semaphore(concurrency)
+                state_lock = _asyncio.Lock()
+
+                from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+                from app.routers.article_analysis import _build_analysis_html
+
+                async def _process_one_article(art: dict):
+                    nonlocal total_analyzed, total_skipped, total_cards, total_errors
+
+                    if _cancel_requested:
+                        return
+
+                    url = art["url"]
+
+                    async with state_lock:
+                        if url in analyzed_urls:
+                            add_entry("skip", "人民日报",
+                                      f"已分析过，跳过: {art['title'][:40]}")
+                            total_skipped += 1
+                            return
+                        if url in url_score_cache:
+                            cached_score = url_score_cache[url]
+                            if cached_score < cfg.quality_threshold:
+                                add_entry("skip", "人民日报",
+                                          f"缓存评分 {cached_score} < 阈值 {cfg.quality_threshold}，跳过: {art['title'][:40]}")
+                                total_skipped += 1
+                                return
+                        analyzed_urls.add(url)
+
+                    source_label = art.get("section", "人民日报")
+
+                    async with sem:
+                        if _cancel_requested:
+                            return
+
+                        try:
+                            fetch_result = await fetch_and_extract_url(url)
+                            body_text = fetch_result["content"]
+                            extracted_title = fetch_result["title"]
+                            title = art["title"] or extracted_title
+
+                            publish_date = art.get("date", "") or ""
+                            if not publish_date:
+                                publish_date = fetch_result["publish_date"]
+
+                            if len(body_text) < 100:
+                                async with state_lock:
+                                    add_entry("skip", source_label,
+                                              f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
+                                    total_skipped += 1
+                                    analyzed_urls.discard(url)
+                                return
+
+                            body_text = await ai_cleanup_content(
+                                config, title, body_text,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+
+                            async with state_lock:
+                                add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
+
+                            analysis_data = await ai_analyze_article(
+                                session, config, title, body_text,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+                            if analysis_data is None:
+                                async with state_lock:
+                                    add_entry("error", source_label, f"AI分析失败: {title[:40]}")
+                                    total_errors += 1
+                                    analyzed_urls.discard(url)
+                                return
+
+                            quality = analysis_data.get("quality_score", 5)
+
+                            if quality < cfg.quality_threshold:
+                                async with state_lock:
+                                    add_entry("skip", source_label,
+                                              f"质量 {quality} < 阈值 {cfg.quality_threshold}，跳过: {title[:40]}")
+                                    total_skipped += 1
+                                    _prev = session.exec(
+                                        select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                                    ).first()
+                                    if _prev:
+                                        _prev.quality_score = quality
+                                        _prev.title = title[:200]
+                                        _prev.analyzed_at = datetime.now(timezone.utc)
+                                    else:
+                                        session.add(IngestionUrlCache(
+                                            url=url, quality_score=quality, title=title[:200],
+                                        ))
+                                    session.commit()
+                                    url_score_cache[url] = quality
+                                return
+
+                            analysis_html = _build_analysis_html(title, analysis_data)
+
+                            async with state_lock:
+                                _prev = session.exec(
+                                    select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                                ).first()
+                                if _prev:
+                                    session.delete(_prev)
+                                    url_score_cache.pop(url, None)
+
+                                analysis_item = ArticleAnalysis(
+                                    user_id=admin_user.id if admin_user else 1,
+                                    title=title,
+                                    source_url=url,
+                                    source_name=art.get("source_name", source_label),
+                                    publish_date=publish_date[:20] if publish_date else "",
+                                    content=body_text,
+                                    analysis_html=analysis_html,
+                                    analysis_json=json.dumps(analysis_data, ensure_ascii=False),
+                                    quality_score=quality,
+                                    quality_reason=analysis_data.get("quality_reason", ""),
+                                    word_count=len(body_text),
+                                    status="new",
+                                )
+                                session.add(analysis_item)
+                                session.commit()
+                                total_analyzed += 1
+                                add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+
+                            cards_created_this, _ = await ai_generate_cards(
+                                session, config, title, body_text,
+                                source_url=url,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+                            async with state_lock:
+                                total_cards += cards_created_this
+                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+
+                        except json.JSONDecodeError as e:
+                            async with state_lock:
+                                add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
+                                total_errors += 1
+                        except Exception as e:
+                            async with state_lock:
+                                add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
+                                total_errors += 1
+                        finally:
+                            async with state_lock:
+                                log.articles_analyzed = total_analyzed
+                                log.articles_skipped = total_skipped
+                                log.cards_created = total_cards
+                                log.errors_count = total_errors
+                                log.updated_at = datetime.now(timezone.utc)
+                                log.log_detail = json.dumps(entries, ensure_ascii=False)
+                                session.add(log)
+                                session.commit()
+
+                tasks = [_process_one_article(art) for art in all_articles]
+                await _asyncio.gather(*tasks)
+
+                if _cancel_requested:
+                    add_entry("info", "系统",
+                              f"回溯已取消: 发现{total_fetched}篇, 分析{total_analyzed}篇, "
+                              f"跳过{total_skipped}篇, 生成{total_cards}张卡片, 错误{total_errors}个")
+                    log.status = "cancelled"
+                else:
+                    add_entry("info", "系统",
+                              f"✅ 回溯完成: 发现{total_fetched}篇, 分析{total_analyzed}篇, "
+                              f"跳过{total_skipped}篇, 生成{total_cards}张卡片, 错误{total_errors}个")
+                    log.status = "success"
+
+                log.articles_fetched = total_fetched
+                log.articles_analyzed = total_analyzed
+                log.articles_skipped = total_skipped
+                log.cards_created = total_cards
+                log.errors_count = total_errors
+
+            except Exception as e:
+                add_entry("error", "系统", f"回溯过程异常: {str(e)[:200]}")
+                log.status = "error"
+
+            log.finished_at = datetime.now(timezone.utc)
+            log.updated_at = datetime.now(timezone.utc)
+            log.log_detail = json.dumps(entries, ensure_ascii=False)
+            session.add(log)
+            session.commit()
+
+    finally:
+        _running_log_id = None
+        _cancel_requested = False
+        _running_lock.release()
+
+
+async def _run_qiushi_backfill_internal(issue_url: str, issue_name: str):
+    """Run 求是杂志 backfill pipeline for a specific issue.
+
+    Similar to the RMRB backfill but crawls a single Qiushi issue.
+    """
+    global _running_log_id, _cancel_requested
+
+    from sqlmodel import Session as SyncSession
+    from app.database import engine as db_engine
+    from app.models.article_analysis import ArticleAnalysis
+    from app.models.ai_config import AIConfig
+    from app.models.user import User
+    from app.services.source_crawlers import crawl_qiushi_issue, fetch_and_extract_url
+
+    acquired = _running_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("Qiushi backfill skipped: another job is already running")
+        return
+
+    try:
+        _cancel_requested = False
+
+        with SyncSession(db_engine) as session:
+            cfg = session.exec(select(IngestionConfig)).first()
+            if not cfg:
+                cfg = IngestionConfig()
+                session.add(cfg)
+                session.commit()
+                session.refresh(cfg)
+
+            log = IngestionLog(
+                run_type="backfill",
+                status="running",
+            )
+            session.add(log)
+            session.commit()
+            session.refresh(log)
+            _running_log_id = log.id
+
+            entries: list[dict] = []
+
+            try:
+                _tz = ZoneInfo(cfg.timezone or "Asia/Shanghai")
+            except Exception:
+                _tz = ZoneInfo("Asia/Shanghai")
+
+            def add_entry(level: str, source: str, message: str):
+                entries.append({
+                    "time": datetime.now(_tz).strftime("%H:%M:%S"),
+                    "level": level,
+                    "source": source,
+                    "message": message,
+                })
+
+            try:
+                config = session.exec(
+                    select(AIConfig).where(AIConfig.is_enabled == True)
+                ).first()
+                if not config or not config.api_key:
+                    add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")
+                    log.status = "error"
+                    log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    session.add(log)
+                    session.commit()
+                    return
+
+                _max_retries = getattr(config, "max_retries", 3) or 3
+
+                analyzed_urls = set()
+                existing_analyses = session.exec(
+                    select(ArticleAnalysis.source_url).where(ArticleAnalysis.source_url != "")
+                ).all()
+                for url in existing_analyses:
+                    if url:
+                        analyzed_urls.add(url.strip())
+
+                _cache_rows = session.exec(select(IngestionUrlCache)).all()
+                url_score_cache: dict[str, float] = {r.url: r.quality_score for r in _cache_rows}
+
+                import re
+                import time as _time
+
+                total_fetched = 0
+                total_analyzed = 0
+                total_skipped = 0
+                total_cards = 0
+                total_errors = 0
+
+                # ═══ Phase 1: Crawl the specific Qiushi issue ═══
+                add_entry("info", "求是杂志", f"开始回溯抓取: {issue_name}")
+
+                try:
+                    all_articles = await crawl_qiushi_issue(issue_url, issue_name)
+                except Exception as crawl_err:
+                    all_articles = []
+                    add_entry("error", "求是杂志", f"抓取期刊页面失败: {str(crawl_err)[:150]}")
+                    logger.error("Qiushi issue crawl raised: %s", crawl_err)
+
+                for art in all_articles:
+                    art["source_name"] = "求是杂志"
+                    art["category"] = "政治理论"
+
+                total_fetched = len(all_articles)
+
+                if total_fetched == 0:
+                    add_entry("warn", "求是杂志",
+                              f"未发现文章，请检查期刊URL是否有效: {issue_url[:80]}")
+                    log.status = "error"
+                    log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    session.add(log)
+                    session.commit()
+                    return
+
+                add_entry("info", "求是杂志", f"发现 {total_fetched} 篇文章，开始逐篇处理...")
+
+                log.articles_fetched = total_fetched
+                log.sources_processed = 1
+                log.updated_at = datetime.now(timezone.utc)
+                log.log_detail = json.dumps(entries, ensure_ascii=False)
+                session.add(log)
+                session.commit()
+
+                if _cancel_requested:
+                    add_entry("warn", "系统", "⚠️ 用户取消了回溯任务")
+                    log.status = "cancelled"
+                    log.finished_at = datetime.now(timezone.utc)
+                    log.updated_at = datetime.now(timezone.utc)
+                    log.log_detail = json.dumps(entries, ensure_ascii=False)
+                    session.add(log)
+                    session.commit()
+                    return
+
+                # ═══ Phase 2: Process each article ═══
+                admin_user = session.exec(select(User).where(User.is_admin == True)).first()
+                if not admin_user:
+                    admin_user = session.exec(select(User)).first()
+
+                concurrency = getattr(cfg, "concurrency", 3) or 3
+                sem = _asyncio.Semaphore(concurrency)
+                state_lock = _asyncio.Lock()
+
+                from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+                from app.routers.article_analysis import _build_analysis_html
+
+                async def _process_one_article(art: dict):
+                    nonlocal total_analyzed, total_skipped, total_cards, total_errors
+
+                    if _cancel_requested:
+                        return
+
+                    url = art["url"]
+
+                    async with state_lock:
+                        if url in analyzed_urls:
+                            add_entry("skip", "求是杂志",
+                                      f"已分析过，跳过: {art['title'][:40]}")
+                            total_skipped += 1
+                            return
+                        if url in url_score_cache:
+                            cached_score = url_score_cache[url]
+                            if cached_score < cfg.quality_threshold:
+                                add_entry("skip", "求是杂志",
+                                          f"缓存评分 {cached_score} < 阈值 {cfg.quality_threshold}，跳过: {art['title'][:40]}")
+                                total_skipped += 1
+                                return
+                        analyzed_urls.add(url)
+
+                    source_label = art.get("section", "求是杂志")
+
+                    async with sem:
+                        if _cancel_requested:
+                            return
+
+                        try:
+                            fetch_result = await fetch_and_extract_url(url)
+                            body_text = fetch_result["content"]
+                            extracted_title = fetch_result["title"]
+                            title = art["title"] or extracted_title
+
+                            publish_date = art.get("date", "") or ""
+                            if not publish_date:
+                                publish_date = fetch_result["publish_date"]
+
+                            if len(body_text) < 100:
+                                async with state_lock:
+                                    add_entry("skip", source_label,
+                                              f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
+                                    total_skipped += 1
+                                    analyzed_urls.discard(url)
+                                return
+
+                            body_text = await ai_cleanup_content(
+                                config, title, body_text,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+
+                            async with state_lock:
+                                add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
+
+                            analysis_data = await ai_analyze_article(
+                                session, config, title, body_text,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+                            if analysis_data is None:
+                                async with state_lock:
+                                    add_entry("error", source_label, f"AI分析失败: {title[:40]}")
+                                    total_errors += 1
+                                    analyzed_urls.discard(url)
+                                return
+
+                            quality = analysis_data.get("quality_score", 5)
+
+                            if quality < cfg.quality_threshold:
+                                async with state_lock:
+                                    add_entry("skip", source_label,
+                                              f"质量 {quality} < 阈值 {cfg.quality_threshold}，跳过: {title[:40]}")
+                                    total_skipped += 1
+                                    _prev = session.exec(
+                                        select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                                    ).first()
+                                    if _prev:
+                                        _prev.quality_score = quality
+                                        _prev.title = title[:200]
+                                        _prev.analyzed_at = datetime.now(timezone.utc)
+                                    else:
+                                        session.add(IngestionUrlCache(
+                                            url=url, quality_score=quality, title=title[:200],
+                                        ))
+                                    session.commit()
+                                    url_score_cache[url] = quality
+                                return
+
+                            analysis_html = _build_analysis_html(title, analysis_data)
+
+                            async with state_lock:
+                                _prev = session.exec(
+                                    select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                                ).first()
+                                if _prev:
+                                    session.delete(_prev)
+                                    url_score_cache.pop(url, None)
+
+                                analysis_item = ArticleAnalysis(
+                                    user_id=admin_user.id if admin_user else 1,
+                                    title=title,
+                                    source_url=url,
+                                    source_name=art.get("source_name", source_label),
+                                    publish_date=publish_date[:20] if publish_date else "",
+                                    content=body_text,
+                                    analysis_html=analysis_html,
+                                    analysis_json=json.dumps(analysis_data, ensure_ascii=False),
+                                    quality_score=quality,
+                                    quality_reason=analysis_data.get("quality_reason", ""),
+                                    word_count=len(body_text),
+                                    status="new",
+                                )
+                                session.add(analysis_item)
+                                session.commit()
+                                total_analyzed += 1
+                                add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+
+                            cards_created_this, _ = await ai_generate_cards(
+                                session, config, title, body_text,
+                                source_url=url,
+                                user_id=admin_user.id if admin_user else 1,
+                            )
+                            async with state_lock:
+                                total_cards += cards_created_this
+                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+
+                        except json.JSONDecodeError as e:
+                            async with state_lock:
+                                add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
+                                total_errors += 1
+                        except Exception as e:
+                            async with state_lock:
+                                add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
+                                total_errors += 1
+                        finally:
+                            async with state_lock:
+                                log.articles_analyzed = total_analyzed
+                                log.articles_skipped = total_skipped
+                                log.cards_created = total_cards
+                                log.errors_count = total_errors
+                                log.updated_at = datetime.now(timezone.utc)
+                                log.log_detail = json.dumps(entries, ensure_ascii=False)
+                                session.add(log)
+                                session.commit()
+
+                tasks = [_process_one_article(art) for art in all_articles]
+                await _asyncio.gather(*tasks)
+
+                if _cancel_requested:
+                    add_entry("info", "系统",
+                              f"回溯已取消: 发现{total_fetched}篇, 分析{total_analyzed}篇, "
+                              f"跳过{total_skipped}篇, 生成{total_cards}张卡片, 错误{total_errors}个")
+                    log.status = "cancelled"
+                else:
+                    add_entry("info", "系统",
+                              f"✅ 求是回溯完成: 发现{total_fetched}篇, 分析{total_analyzed}篇, "
+                              f"跳过{total_skipped}篇, 生成{total_cards}张卡片, 错误{total_errors}个")
+                    log.status = "success"
+
+                log.articles_fetched = total_fetched
+                log.articles_analyzed = total_analyzed
+                log.articles_skipped = total_skipped
+                log.cards_created = total_cards
+                log.errors_count = total_errors
+
+            except Exception as e:
+                add_entry("error", "系统", f"求是回溯过程异常: {str(e)[:200]}")
+                log.status = "error"
+
+            log.finished_at = datetime.now(timezone.utc)
+            log.updated_at = datetime.now(timezone.utc)
+            log.log_detail = json.dumps(entries, ensure_ascii=False)
+            session.add(log)
+            session.commit()
+
+    finally:
+        _running_log_id = None
+        _cancel_requested = False
+        _running_lock.release()
+
+
 @router.post("/run")
 async def run_ingestion(
     current_user: User = Depends(get_current_user),

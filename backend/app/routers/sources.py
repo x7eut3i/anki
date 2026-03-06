@@ -308,6 +308,119 @@ async def test_source(
         }
 
 
+class RmrbBackfillRequest(BaseModel):
+    start_date: str  # YYYY-MM-DD
+    end_date: str    # YYYY-MM-DD
+
+
+@router.post("/rmrb-backfill")
+async def rmrb_backfill(
+    data: RmrbBackfillRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Trigger 人民日报 backfill for a date range.
+
+    Launches a background pipeline that crawls RMRB for each day in
+    the range, then processes all articles (dedup, analyze, generate cards).
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    # Parse dates
+    try:
+        start = datetime.strptime(data.start_date, "%Y-%m-%d")
+        end = datetime.strptime(data.end_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式错误，请使用 YYYY-MM-DD")
+
+    if start > end:
+        start, end = end, start
+
+    day_count = (end - start).days + 1
+    if day_count > 60:
+        raise HTTPException(status_code=400, detail="最多支持回溯60天")
+
+    # Check if ingestion is already running
+    from app.routers.ingestion import _is_running, _running_log_id
+    if _is_running():
+        raise HTTPException(
+            status_code=409,
+            detail=f"已有抓取任务正在运行（日志 #{_running_log_id}），请等待完成或取消后再试",
+        )
+
+    # Launch backfill in background
+    import asyncio
+    from app.routers.ingestion import _run_rmrb_backfill_internal
+    asyncio.get_event_loop().create_task(
+        _run_rmrb_backfill_internal(data.start_date, data.end_date)
+    )
+
+    return {
+        "ok": True,
+        "message": f"已启动人民日报回溯抓取: {data.start_date} → {data.end_date} ({day_count}天)",
+    }
+
+
+@router.get("/qiushi-issues")
+async def list_qiushi_issues(
+    year: int,
+    current_user: User = Depends(get_current_user),
+):
+    """List all issues of 求是杂志 for a given year."""
+    from app.services.source_crawlers import crawl_qiushi_issues
+
+    if year < 2010 or year > 2099:
+        raise HTTPException(status_code=400, detail="年份范围: 2010-2099")
+
+    issues = await crawl_qiushi_issues(year)
+    return {
+        "year": year,
+        "issues": issues,
+    }
+
+
+class QiushiBackfillRequest(BaseModel):
+    issue_url: str
+    issue_name: str  # e.g. "2026年 第5期"
+
+
+@router.post("/qiushi-backfill")
+async def qiushi_backfill(
+    data: QiushiBackfillRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Trigger 求是杂志 backfill for a specific issue.
+
+    Crawls all articles from the selected issue, then processes them
+    through the full pipeline (dedup, analyze, generate cards).
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    if not data.issue_url or "qstheory.cn" not in data.issue_url:
+        raise HTTPException(status_code=400, detail="无效的求是期刊URL")
+
+    from app.routers.ingestion import _is_running, _running_log_id
+    if _is_running():
+        raise HTTPException(
+            status_code=409,
+            detail=f"已有抓取任务正在运行（日志 #{_running_log_id}），请等待完成或取消后再试",
+        )
+
+    import asyncio
+    from app.routers.ingestion import _run_qiushi_backfill_internal
+    asyncio.get_event_loop().create_task(
+        _run_qiushi_backfill_internal(data.issue_url, data.issue_name)
+    )
+
+    return {
+        "ok": True,
+        "message": f"已启动求是杂志回溯抓取: {data.issue_name}",
+    }
+
+
 @router.post("/test-url")
 async def test_url(
     data: SourceCreate,

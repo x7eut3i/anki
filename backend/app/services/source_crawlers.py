@@ -224,6 +224,73 @@ async def crawl_rmrb(date: datetime | None = None) -> list[dict]:
         return []
 
 
+async def crawl_rmrb_range(
+    start_date: datetime,
+    end_date: datetime,
+    *,
+    progress_callback: callable | None = None,
+) -> list[dict]:
+    """Crawl 人民日报 for a date range (inclusive).
+
+    Args:
+        start_date: First date to crawl.
+        end_date: Last date to crawl (inclusive).
+        progress_callback: Optional async callback(date_str, articles_count) for progress.
+
+    Returns list of all articles across all dates, deduplicated by URL.
+    """
+    all_articles: list[dict] = []
+    seen_urls: set[str] = set()
+
+    # Normalize to date only (strip time)
+    current = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if current > end:
+        current, end = end, current
+
+    # Safety: max 60 days to avoid abuse
+    day_count = (end - current).days + 1
+    if day_count > 60:
+        logger.warning("RMRB backfill requested %d days, capping at 60", day_count)
+        end = current + timedelta(days=59)
+        day_count = 60
+
+    logger.info("RMRB backfill: %s → %s (%d days)",
+                current.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'), day_count)
+
+    while current <= end:
+        date_str = current.strftime("%Y-%m-%d")
+        try:
+            day_articles = await crawl_rmrb(current)
+            new_count = 0
+            for art in day_articles:
+                if art["url"] not in seen_urls:
+                    seen_urls.add(art["url"])
+                    all_articles.append(art)
+                    new_count += 1
+            logger.debug("RMRB %s: %d articles (%d new)", date_str, len(day_articles), new_count)
+            if progress_callback:
+                await progress_callback(date_str, new_count)
+        except Exception as e:
+            logger.warning("RMRB %s failed: %s", date_str, str(e)[:100])
+            if progress_callback:
+                await progress_callback(date_str, -1)  # -1 signals error
+
+        # Check cancellation between days
+        from app.routers.ingestion import _is_cancel_requested
+        if _is_cancel_requested():
+            logger.info("RMRB backfill cancelled after %s", date_str)
+            break
+
+        # Polite delay between days
+        await _polite_delay(1.0, 2.5)
+        current += timedelta(days=1)
+
+    logger.info("RMRB backfill complete: %d total unique articles", len(all_articles))
+    return all_articles
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 求是杂志 — Special crawler
 # ══════════════════════════════════════════════════════════════════════
@@ -350,6 +417,166 @@ async def crawl_qiushi() -> list[dict]:
 
     except Exception as e:
         logger.error(f"求是 crawl failed: {e}")
+        return []
+
+
+async def crawl_qiushi_issues(year: int) -> list[dict]:
+    """List all issues of 求是杂志 for a given year.
+
+    Returns list: [{"issue": int, "text": str, "url": str}]
+    sorted by issue number ascending.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            # Step 1: Fetch directory to find the year
+            resp = await client.get(
+                "https://www.qstheory.cn/qs/mulu.htm", headers=_random_headers(),
+            )
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            year_url = None
+            for a in soup.find_all("a", href=True):
+                text = a.get_text(strip=True)
+                if text == f"{year}年":
+                    url = a["href"]
+                    if not url.startswith("http"):
+                        url = urljoin("https://www.qstheory.cn/qs/mulu.htm", url)
+                    year_url = url
+                    break
+
+            if not year_url:
+                logger.warning("求是: year %d not found on directory page", year)
+                return []
+
+            # Step 2: Fetch year page to list issues
+            await _polite_delay(0.5, 1.5)
+            resp = await client.get(year_url, headers=_random_headers())
+            resp.raise_for_status()
+            year_soup = BeautifulSoup(resp.text, "html.parser")
+
+            issues = []
+            for a in year_soup.find_all("a", href=True):
+                text = a.get_text(strip=True)
+                m = re.search(r"第(\d+)期", text)
+                if m:
+                    url = a["href"]
+                    if not url.startswith("http"):
+                        url = urljoin(year_url, url)
+                    issues.append({
+                        "issue": int(m.group(1)),
+                        "text": text.strip(),
+                        "url": url,
+                    })
+
+            # Deduplicate by issue number
+            seen = set()
+            unique = []
+            for iss in issues:
+                if iss["issue"] not in seen:
+                    seen.add(iss["issue"])
+                    unique.append(iss)
+
+            unique.sort(key=lambda x: x["issue"])
+            logger.debug("求是 %d年: found %d issues", year, len(unique))
+            return unique
+
+    except Exception as e:
+        logger.error("求是 list issues for %d failed: %s", year, e)
+        return []
+
+
+async def crawl_qiushi_issue(issue_url: str, issue_name: str = "") -> list[dict]:
+    """Crawl a specific issue of 求是杂志 by its URL.
+
+    Args:
+        issue_url: The URL of the issue page.
+        issue_name: Display name like "第5期" for labeling.
+
+    Returns list of articles: [{"title": str, "url": str, "section": str, "date": str}]
+    """
+    articles: list[dict] = []
+    label = f"求是-{issue_name}" if issue_name else "求是杂志"
+
+    # Extract expected year from issue_name (e.g. "2024年 《求是》2024年第1期")
+    # or from the issue URL, so we can filter boilerplate links while allowing
+    # old-year backfill.
+    _name_year = re.search(r'(\d{4})', issue_name) if issue_name else None
+    if _name_year:
+        expected_year = int(_name_year.group(1))
+    else:
+        # Try new URL format: /YYYYMMDD/uuid/c.html
+        _iy_match = re.search(r'/(\d{4})\d{4}/', issue_url)
+        if not _iy_match:
+            # Try old URL format: /YYYY-MM/DD/...
+            _iy_match = re.search(r'/(\d{4})-\d{2}/', issue_url)
+        expected_year = int(_iy_match.group(1)) if _iy_match else datetime.now().year
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(issue_url, headers=_random_headers())
+            resp.raise_for_status()
+            html_text = resp.text
+            issue_soup = BeautifulSoup(html_text, "html.parser")
+
+            all_links = issue_soup.find_all("a", href=True)
+            logger.info("求是 %s: fetched issue page (%d bytes, %d links), expected_year=%d",
+                        label, len(html_text), len(all_links), expected_year)
+
+            for a in all_links:
+                title = a.get_text(strip=True)
+                href = a["href"]
+
+                if not title or len(title) < 5:
+                    continue
+                if any(skip in title for skip in (
+                    "首页", "返回", "目录", "上一", "下一", "导航",
+                    "理论资源", "sitemap", "投稿", "订阅", "关于我们",
+                    "网站声明", "版权声明", "联系我们",
+                )):
+                    continue
+                if "mulu" in href or href.startswith("#") or href.startswith("javascript"):
+                    continue
+                if any(skip in href for skip in (
+                    "sitemap", "mulu", "index.htm", "about.", "contact",
+                )):
+                    continue
+
+                if not href.startswith("http"):
+                    href = urljoin(issue_url, href)
+
+                if "qstheory.cn" not in href or href == issue_url:
+                    continue
+                if not re.search(r'/\d{4}[-/]?\d{2}[-/]?\d{2}', href):
+                    continue
+                # Filter boilerplate links (e.g. 网站声明 from 2021) using
+                # the issue's own year as reference, NOT the current year.
+                old_year_match = re.search(r'/(\d{4})[-/]?\d{2}', href)
+                if old_year_match:
+                    link_year = int(old_year_match.group(1))
+                    if link_year < expected_year - 1:
+                        continue
+
+                articles.append({
+                    "title": title,
+                    "url": href,
+                    "section": label,
+                    "date": "",
+                })
+
+            # Deduplicate
+            seen = set()
+            unique = []
+            for art in articles:
+                if art["url"] not in seen:
+                    seen.add(art["url"])
+                    unique.append(art)
+
+            logger.info("求是 %s: found %d articles (after dedup)", label, len(unique))
+            return unique
+
+    except Exception as e:
+        logger.error("求是 crawl issue %s failed: %s", issue_url[:80], e)
         return []
 
 

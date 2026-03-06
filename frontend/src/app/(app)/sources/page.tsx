@@ -24,6 +24,8 @@ import {
   FileText,
   AlertCircle,
   RefreshCw,
+  CalendarRange,
+  BookOpen,
 } from "lucide-react";
 
 interface Source {
@@ -60,6 +62,19 @@ export default function SourcesPage() {
   const [testing, setTesting] = useState<number | null>(null);
   const [testResult, setTestResult] = useState<{ id: number } & TestResult | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [backfillOpen, setBackfillOpen] = useState(false);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const [backfillDates, setBackfillDates] = useState({ start_date: "", end_date: "" });
+  const [backfillResult, setBackfillResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // 求是 backfill state
+  const [qsOpen, setQsOpen] = useState(false);
+  const [qsYear, setQsYear] = useState(new Date().getFullYear());
+  const [qsIssues, setQsIssues] = useState<{ issue: number; text: string; url: string }[]>([]);
+  const [qsLoadingIssues, setQsLoadingIssues] = useState(false);
+  const [qsSelectedIssue, setQsSelectedIssue] = useState<{ issue: number; text: string; url: string } | null>(null);
+  const [qsBackfillLoading, setQsBackfillLoading] = useState(false);
+  const [qsResult, setQsResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Form state
   const [form, setForm] = useState({ name: "", url: "", source_type: "rss", category: "时政热点", description: "" });
@@ -168,6 +183,53 @@ export default function SourcesPage() {
       alert("恢复失败: " + (err.message || "未知错误"));
     } finally {
       setResetting(false);
+    }
+  };
+
+  const handleBackfill = async () => {
+    if (!token || !backfillDates.start_date || !backfillDates.end_date) return;
+    setBackfillLoading(true);
+    setBackfillResult(null);
+    try {
+      const result = await sourcesApi.backfill(backfillDates, token);
+      setBackfillResult({ ok: true, message: result.message });
+    } catch (err: any) {
+      setBackfillResult({ ok: false, message: err.message || "回溯抓取启动失败" });
+    } finally {
+      setBackfillLoading(false);
+    }
+  };
+
+  const handleQsLoadIssues = async (year: number) => {
+    if (!token) return;
+    setQsLoadingIssues(true);
+    setQsIssues([]);
+    setQsSelectedIssue(null);
+    setQsResult(null);
+    try {
+      const result = await sourcesApi.qiushiIssues(year, token);
+      setQsIssues(result.issues || []);
+    } catch (err: any) {
+      setQsResult({ ok: false, message: "获取期刊列表失败: " + (err.message || "未知错误") });
+    } finally {
+      setQsLoadingIssues(false);
+    }
+  };
+
+  const handleQsBackfill = async () => {
+    if (!token || !qsSelectedIssue) return;
+    setQsBackfillLoading(true);
+    setQsResult(null);
+    try {
+      const result = await sourcesApi.qiushiBackfill(
+        { issue_url: qsSelectedIssue.url, issue_name: `${qsYear}年 ${qsSelectedIssue.text}` },
+        token,
+      );
+      setQsResult({ ok: true, message: result.message });
+    } catch (err: any) {
+      setQsResult({ ok: false, message: err.message || "回溯抓取启动失败" });
+    } finally {
+      setQsBackfillLoading(false);
     }
   };
 
@@ -387,6 +449,217 @@ export default function SourcesPage() {
                       <p className="text-xs text-muted-foreground truncate">{source.url}</p>
                       {source.is_system && (
                         <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-1">系统来源使用特殊抓取规则，不可编辑或删除</p>
+                      )}
+                      {source.is_system && source.name.includes("人民日报") && (
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBackfillOpen(!backfillOpen);
+                              setBackfillResult(null);
+                              if (!backfillDates.start_date) {
+                                const today = new Date();
+                                const weekAgo = new Date(today);
+                                weekAgo.setDate(weekAgo.getDate() - 7);
+                                setBackfillDates({
+                                  start_date: weekAgo.toISOString().split("T")[0],
+                                  end_date: today.toISOString().split("T")[0],
+                                });
+                              }
+                            }}
+                          >
+                            <CalendarRange className="h-3.5 w-3.5" />
+                            回溯抓取
+                          </Button>
+                          {backfillOpen && (
+                            <div
+                              className="mt-2 p-3 rounded-lg border bg-muted/30 space-y-3"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <p className="text-xs text-muted-foreground">
+                                选择日期范围，抓取该时段内的人民日报文章（最多60天）。抓取任务会在后台运行，可在「自动抓取」页面查看进度。
+                              </p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5">
+                                  <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">起始</label>
+                                  <input
+                                    type="date"
+                                    value={backfillDates.start_date}
+                                    onChange={(e) => setBackfillDates({ ...backfillDates, start_date: e.target.value })}
+                                    className="h-8 px-2 rounded-md border border-input bg-background text-xs"
+                                  />
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">截止</label>
+                                  <input
+                                    type="date"
+                                    value={backfillDates.end_date}
+                                    onChange={(e) => setBackfillDates({ ...backfillDates, end_date: e.target.value })}
+                                    className="h-8 px-2 rounded-md border border-input bg-background text-xs"
+                                  />
+                                </div>
+                                <Button
+                                  size="sm"
+                                  className="h-8 text-xs gap-1"
+                                  disabled={backfillLoading || !backfillDates.start_date || !backfillDates.end_date}
+                                  onClick={handleBackfill}
+                                >
+                                  {backfillLoading ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Check className="h-3.5 w-3.5" />
+                                  )}
+                                  开始回溯
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 text-xs"
+                                  onClick={() => { setBackfillOpen(false); setBackfillResult(null); }}
+                                >
+                                  取消
+                                </Button>
+                              </div>
+                              {backfillDates.start_date && backfillDates.end_date && (() => {
+                                const days = Math.floor((new Date(backfillDates.end_date).getTime() - new Date(backfillDates.start_date).getTime()) / 86400000) + 1;
+                                return days > 0 ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    共 <span className="font-medium text-foreground">{days}</span> 天
+                                    {days > 60 && <span className="text-red-500 ml-1">（超过60天上限，将自动截断）</span>}
+                                  </p>
+                                ) : null;
+                              })()}
+                              {backfillResult && (
+                                <div className={`text-xs p-2 rounded ${backfillResult.ok ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300"}`}>
+                                  {backfillResult.ok ? "✅" : "❌"} {backfillResult.message}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {source.is_system && source.name.includes("求是") && (
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setQsOpen(!qsOpen);
+                              setQsResult(null);
+                            }}
+                          >
+                            <BookOpen className="h-3.5 w-3.5" />
+                            回溯抓取
+                          </Button>
+                          {qsOpen && (
+                            <div
+                              className="mt-2 p-3 rounded-lg border bg-muted/30 space-y-3"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <p className="text-xs text-muted-foreground">
+                                选择年份查询期刊列表，再选择一期进行回溯抓取。抓取任务会在后台运行，可在「自动抓取」页面查看进度。
+                              </p>
+                              {/* Step 1: Year selector */}
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1.5">
+                                  <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">年份</label>
+                                  <select
+                                    value={qsYear}
+                                    onChange={(e) => {
+                                      setQsYear(Number(e.target.value));
+                                      setQsIssues([]);
+                                      setQsSelectedIssue(null);
+                                      setQsResult(null);
+                                    }}
+                                    className="h-8 px-2 rounded-md border border-input bg-background text-xs"
+                                  >
+                                    {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).map((y) => (
+                                      <option key={y} value={y}>{y}年</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 text-xs gap-1"
+                                  disabled={qsLoadingIssues}
+                                  onClick={() => handleQsLoadIssues(qsYear)}
+                                >
+                                  {qsLoadingIssues ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <FileText className="h-3.5 w-3.5" />
+                                  )}
+                                  查询期刊
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-8 text-xs"
+                                  onClick={() => { setQsOpen(false); setQsResult(null); setQsIssues([]); setQsSelectedIssue(null); }}
+                                >
+                                  取消
+                                </Button>
+                              </div>
+                              {/* Step 2: Issue selector */}
+                              {qsIssues.length > 0 && (
+                                <div className="space-y-2">
+                                  <p className="text-xs font-medium text-muted-foreground">
+                                    {qsYear}年 共 {qsIssues.length} 期，选择一期：
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {qsIssues.map((iss) => (
+                                      <Button
+                                        key={iss.issue}
+                                        size="sm"
+                                        variant={qsSelectedIssue?.issue === iss.issue ? "default" : "outline"}
+                                        className="h-7 text-xs px-2.5"
+                                        onClick={() => { setQsSelectedIssue(iss); setQsResult(null); }}
+                                      >
+                                        {iss.text}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                  {qsSelectedIssue && (
+                                    <div className="flex items-center gap-2 pt-1">
+                                      <span className="text-xs text-muted-foreground">
+                                        已选: <span className="font-medium text-foreground">{qsSelectedIssue.text}</span>
+                                      </span>
+                                      <Button
+                                        size="sm"
+                                        className="h-8 text-xs gap-1"
+                                        disabled={qsBackfillLoading}
+                                        onClick={handleQsBackfill}
+                                      >
+                                        {qsBackfillLoading ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Check className="h-3.5 w-3.5" />
+                                        )}
+                                        开始抓取
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {qsLoadingIssues && qsIssues.length === 0 && (
+                                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                  <Loader2 className="h-3 w-3 animate-spin" /> 正在查询期刊列表...
+                                </p>
+                              )}
+                              {qsResult && (
+                                <div className={`text-xs p-2 rounded ${qsResult.ok ? "bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300" : "bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300"}`}>
+                                  {qsResult.ok ? "✅" : "❌"} {qsResult.message}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       )}
                       {!source.is_system && (
                         <p className="text-xs text-muted-foreground/60 mt-1">点击编辑</p>
