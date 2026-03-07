@@ -497,6 +497,9 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 user_id=admin_user.id if admin_user else 1,
                             )
 
+                            if _cancel_requested:
+                                return
+
                             async with state_lock:
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
                             
@@ -567,14 +570,15 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
 
                             # ── AI Step 3: Card generation ──
-                            cards_created_this, _ = await ai_generate_cards(
-                                session, config, title, body_text,
-                                source_url=url,
-                                user_id=admin_user.id if admin_user else 1,
-                            )
-                            async with state_lock:
-                                total_cards += cards_created_this
-                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+                            if not _cancel_requested:
+                                cards_created_this, _ = await ai_generate_cards(
+                                    session, config, title, body_text,
+                                    source_url=url,
+                                    user_id=admin_user.id if admin_user else 1,
+                                )
+                                async with state_lock:
+                                    total_cards += cards_created_this
+                                    add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
                         except json.JSONDecodeError as e:
                             async with state_lock:
@@ -841,6 +845,9 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 user_id=admin_user.id if admin_user else 1,
                             )
 
+                            if _cancel_requested:
+                                return
+
                             async with state_lock:
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
 
@@ -906,14 +913,17 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 total_analyzed += 1
                                 add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
 
-                            cards_created_this, _ = await ai_generate_cards(
-                                session, config, title, body_text,
-                                source_url=url,
-                                user_id=admin_user.id if admin_user else 1,
-                            )
+                            cards_created_this = 0
+                            if not _cancel_requested:
+                                cards_created_this, _ = await ai_generate_cards(
+                                    session, config, title, body_text,
+                                    source_url=url,
+                                    user_id=admin_user.id if admin_user else 1,
+                                )
                             async with state_lock:
                                 total_cards += cards_created_this
-                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+                                if cards_created_this:
+                                    add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
                         except json.JSONDecodeError as e:
                             async with state_lock:
@@ -1177,6 +1187,9 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 user_id=admin_user.id if admin_user else 1,
                             )
 
+                            if _cancel_requested:
+                                return
+
                             async with state_lock:
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
 
@@ -1242,14 +1255,17 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 total_analyzed += 1
                                 add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
 
-                            cards_created_this, _ = await ai_generate_cards(
-                                session, config, title, body_text,
-                                source_url=url,
-                                user_id=admin_user.id if admin_user else 1,
-                            )
+                            cards_created_this = 0
+                            if not _cancel_requested:
+                                cards_created_this, _ = await ai_generate_cards(
+                                    session, config, title, body_text,
+                                    source_url=url,
+                                    user_id=admin_user.id if admin_user else 1,
+                                )
                             async with state_lock:
                                 total_cards += cards_created_this
-                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+                                if cards_created_this:
+                                    add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
                         except json.JSONDecodeError as e:
                             async with state_lock:

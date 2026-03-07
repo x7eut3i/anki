@@ -7,6 +7,7 @@ import secrets
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
@@ -313,6 +314,35 @@ async def lifespan(app: FastAPI):
     seed_default_decks()
     seed_ai_configs()
     seed_article_sources()
+
+    # Mark any "running" ingestion logs as interrupted (server restarted)
+    try:
+        from sqlmodel import Session as _Session, select as _select
+        from app.database import engine as _engine
+        with _Session(_engine) as _sess:
+            stale = _sess.exec(
+                _select(IngestionLog).where(IngestionLog.status == "running")
+            ).all()
+            for sl in stale:
+                sl.status = "error"
+                sl.finished_at = sl.finished_at or datetime.now(timezone.utc)
+                try:
+                    entries = json.loads(sl.log_detail) if sl.log_detail else []
+                except (json.JSONDecodeError, TypeError):
+                    entries = []
+                entries.append({
+                    "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                    "level": "error",
+                    "source": "系统",
+                    "message": "服务器重启，任务被中断",
+                })
+                sl.log_detail = json.dumps(entries, ensure_ascii=False)
+                _sess.add(sl)
+            if stale:
+                _sess.commit()
+                logger.info("🔧 Marked %d stale 'running' ingestion logs as interrupted", len(stale))
+    except Exception as e:
+        logger.warning("Failed to clean up stale ingestion logs: %s", e)
 
     # Clean up old logs based on retention setting
     try:

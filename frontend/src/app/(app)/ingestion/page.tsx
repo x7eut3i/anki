@@ -73,9 +73,8 @@ export default function IngestionPage() {
       setConfig(cfg);
       setLogs(logsData);
       // If any job is running, mark button state
-      if (logsData.some((l: IngestionLog) => l.status === "running")) {
-        setRunning(true);
-      }
+      const hasRunningLog = logsData.some((l: IngestionLog) => l.status === "running");
+      setRunning(hasRunningLog);
     } catch (err) {
       console.error("Failed to load ingestion data:", err);
     } finally {
