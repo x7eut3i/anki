@@ -28,10 +28,38 @@ logger = logging.getLogger("anki.ai_pipeline")
 #   2. Concurrency semaphore: at most N requests *in-flight* simultaneously.
 #      Acquired after the window check, released as soon as the request ends.
 #
+# The RPM limit is always read fresh from the database so mid-pipeline changes
+# take effect immediately.
+#
 _rpm_semaphore: asyncio.Semaphore | None = None
 _rpm_window_lock = asyncio.Lock()
 _rpm_timestamps: list[float] = []   # monotonic times of recent request starts
 _rpm_limit: int = 0                 # 0 = unlimited
+
+
+def _read_current_rpm_limit(config) -> int:
+    """Read the latest RPM limit from the database.
+
+    Falls back to the (possibly stale) config object if the DB read fails.
+    """
+    try:
+        from app.database import engine as db_engine
+        from app.models.ai_config import AIConfig
+
+        with Session(db_engine) as session:
+            user_id = getattr(config, "user_id", None)
+            if user_id:
+                db_config = session.exec(
+                    select(AIConfig).where(
+                        AIConfig.user_id == user_id,
+                        AIConfig.is_enabled == True,
+                    )
+                ).first()
+                if db_config:
+                    return db_config.rpm_limit or 0
+    except Exception:
+        pass
+    return getattr(config, "rpm_limit", 0) or 0
 
 
 async def _rpm_acquire(config) -> bool:
@@ -42,7 +70,7 @@ async def _rpm_acquire(config) -> bool:
     """
     global _rpm_semaphore, _rpm_limit, _rpm_timestamps
 
-    limit = getattr(config, "rpm_limit", 0) or 0
+    limit = _read_current_rpm_limit(config)
     if limit <= 0:
         return False  # No rate limit configured
 
@@ -56,12 +84,21 @@ async def _rpm_acquire(config) -> bool:
 
     # ── Step 1: sliding-window check (at most N starts per 60 s) ──
     while True:
+        # Re-read limit each iteration — user may change it while we wait
+        limit = _read_current_rpm_limit(config)
+        if limit <= 0:
+            return False
+        if limit != _rpm_limit:
+            _rpm_limit = limit
+            _rpm_semaphore = asyncio.Semaphore(limit)
+            _rpm_timestamps = []
+
         wait_time = 0.0
         async with _rpm_window_lock:
             now = time.monotonic()
             # Purge timestamps older than 60 s
             _rpm_timestamps[:] = [t for t in _rpm_timestamps if now - t < 60.0]
-            if len(_rpm_timestamps) < limit:
+            if len(_rpm_timestamps) < _rpm_limit:
                 # Room in the window – claim a slot
                 _rpm_timestamps.append(now)
                 break
@@ -69,7 +106,7 @@ async def _rpm_acquire(config) -> bool:
             wait_time = 60.0 - (now - _rpm_timestamps[0]) + 0.1
 
         logger.info("RPM rate limit: window full, waiting %.1fs (limit=%d/min)",
-                    wait_time, limit)
+                    wait_time, _rpm_limit)
         await asyncio.sleep(wait_time)
 
     # ── Step 2: concurrency check (at most N in-flight) ──
