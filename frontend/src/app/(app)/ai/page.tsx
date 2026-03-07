@@ -35,6 +35,9 @@ interface ConfigProfile {
   model: string;
   model_pipeline: string;
   model_reading: string;
+  fallback_model: string;
+  fallback_cooldown: number;
+  rpm_limit: number;
   max_daily_calls: number;
   import_batch_size: number;
   import_concurrency: number;
@@ -70,6 +73,10 @@ export default function AIPage() {
   const [maxTokens, setMaxTokens] = useState(8192);
   const [temperature, setTemperature] = useState(0.3);
   const [maxRetries, setMaxRetries] = useState(3);
+  const [fallbackModel, setFallbackModel] = useState("");
+  const [fallbackCooldown, setFallbackCooldown] = useState(600);
+  const [rpmLimit, setRpmLimit] = useState(0);
+  const [fallbackStatus, setFallbackStatus] = useState<{ active: boolean; fallback_model?: string; reason?: string; remaining_seconds?: number } | null>(null);
   const [isEnabled, setIsEnabled] = useState(false);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [testingConn, setTestingConn] = useState(false);
@@ -120,6 +127,9 @@ export default function AIPage() {
     setMaxTokens(p.max_tokens || 8192);
     setTemperature(p.temperature ?? 0.3);
     setMaxRetries(p.max_retries ?? 3);
+    setFallbackModel(p.fallback_model || "");
+    setFallbackCooldown(p.fallback_cooldown || 600);
+    setRpmLimit(p.rpm_limit || 0);
     setApiKeySet(p.api_key_set || false);
     setIsEnabled(p.is_enabled || false);
     setApiKey("");
@@ -128,6 +138,17 @@ export default function AIPage() {
   };
 
   useEffect(() => { loadProfiles(); }, [token]);
+
+  // Poll fallback status
+  useEffect(() => {
+    if (!token) return;
+    const loadStatus = () => {
+      ai.fallbackStatus(token).then(setFallbackStatus).catch(() => {});
+    };
+    loadStatus();
+    const interval = setInterval(loadStatus, 30000); // Poll every 30s
+    return () => clearInterval(interval);
+  }, [token]);
 
   const handleSwitchProfile = async (profileId: number) => {
     if (!token || profileId === activeProfileId) return;
@@ -186,6 +207,9 @@ export default function AIPage() {
         max_tokens: maxTokens,
         temperature: temperature,
         max_retries: maxRetries,
+        fallback_model: fallbackModel,
+        fallback_cooldown: fallbackCooldown,
+        rpm_limit: rpmLimit,
         is_enabled: true,
       };
       if (apiKey) {
@@ -496,6 +520,19 @@ export default function AIPage() {
               />
             </div>
             <div>
+              <label className="text-sm font-medium">RPM 限制（每分钟请求数）</label>
+              <Input
+                type="number"
+                value={rpmLimit}
+                onChange={(e) => setRpmLimit(parseInt(e.target.value) || 0)}
+                min={0}
+                max={600}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                限制每分钟的 AI 请求次数。0 = 不限制。适用于所有 AI 功能（文章清洗、分析、卡片生成、对话等）。建议根据 API 提供商的限额设置。
+              </p>
+            </div>
+            <div>
               <label className="text-sm font-medium">导入批处理大小</label>
               <Input
                 type="number"
@@ -558,6 +595,69 @@ export default function AIPage() {
               <p className="text-xs text-muted-foreground mt-1">
                 AI调用失败后最大重试次数。每次重试间隔递增（指数退避）。默认 3 次
               </p>
+            </div>
+
+            {/* Fallback Model */}
+            <div className="border-t pt-4 space-y-4">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                🔄 备用模型 (Fallback)
+              </h3>
+              <div>
+                <label className="text-sm font-medium">备用模型名称</label>
+                <div className="flex gap-2">
+                  {models.length > 0 ? (
+                    <select
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={fallbackModel}
+                      onChange={(e) => setFallbackModel(e.target.value)}
+                    >
+                      <option value="">不使用备用模型</option>
+                      {models.filter((m) => m !== model).map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      placeholder="留空则不使用备用模型"
+                      value={fallbackModel}
+                      onChange={(e) => setFallbackModel(e.target.value)}
+                    />
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  当主模型遇到 429（频率限制）或服务器错误时，自动切换到此模型。冷却期结束后恢复主模型。
+                </p>
+              </div>
+              <div>
+                <label className="text-sm font-medium">冷却时间（秒）</label>
+                <Input
+                  type="number"
+                  value={fallbackCooldown}
+                  onChange={(e) => setFallbackCooldown(parseInt(e.target.value) || 600)}
+                  min={60}
+                  max={3600}
+                  step={60}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  切换到备用模型后，在此时间内所有 AI 请求均使用备用模型，避免重复触发频率限制。默认 600 秒（10 分钟）
+                </p>
+              </div>
+              {fallbackStatus?.active && (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3 text-sm space-y-1">
+                  <p className="font-medium text-amber-700 dark:text-amber-300">
+                    ⚠️ 备用模型激活中
+                  </p>
+                  <p className="text-amber-600 dark:text-amber-400">
+                    当前使用: <span className="font-medium">{fallbackStatus.fallback_model}</span>
+                  </p>
+                  <p className="text-amber-600 dark:text-amber-400">
+                    原因: {fallbackStatus.reason}
+                  </p>
+                  <p className="text-amber-600 dark:text-amber-400">
+                    剩余时间: {Math.ceil((fallbackStatus.remaining_seconds || 0) / 60)} 分钟
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2">

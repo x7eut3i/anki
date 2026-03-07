@@ -356,13 +356,23 @@ def update_star(
 @router.delete("/{analysis_id}", status_code=204)
 def delete_analysis(
     analysis_id: int,
+    delete_cards: bool = Query(False, description="Also delete associated flashcards"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Delete an article analysis."""
+    """Delete an article analysis, optionally deleting associated cards."""
     item = session.get(ArticleAnalysis, analysis_id)
     if not item:
         raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Optionally delete associated cards
+    if delete_cards and item.source_url:
+        from app.models.card import Card
+        cards = session.exec(
+            select(Card).where(Card.source == item.source_url)
+        ).all()
+        for card in cards:
+            session.delete(card)
 
     session.delete(item)
     session.commit()
@@ -370,6 +380,7 @@ def delete_analysis(
 
 class BatchIdsRequest(BaseModel):
     ids: list[int]
+    delete_cards: bool = False
 
 
 @router.post("/batch-delete")
@@ -378,11 +389,19 @@ def batch_delete(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Batch delete multiple articles."""
+    """Batch delete multiple articles, optionally deleting associated cards."""
+    from app.models.card import Card
+
     count = 0
     for aid in data.ids:
         item = session.get(ArticleAnalysis, aid)
         if item:
+            if data.delete_cards and item.source_url:
+                cards = session.exec(
+                    select(Card).where(Card.source == item.source_url)
+                ).all()
+                for card in cards:
+                    session.delete(card)
             session.delete(item)
             count += 1
     session.commit()

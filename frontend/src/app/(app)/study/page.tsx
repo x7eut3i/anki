@@ -51,8 +51,13 @@ export default function StudyPage() {
   const computeForceTypes = useCallback((cards: any[]) => {
     const map: Record<number, "qa" | "choice"> = {};
     cards.forEach((c) => {
-      // In review/mix mode, 60% Q&A, 40% choice
-      map[c.id] = Math.random() < 0.6 ? "qa" : "choice";
+      // 实词辨析 cards: always choice (selection-based by nature)
+      if (c.category_name === "实词辨析") {
+        map[c.id] = "choice";
+      } else {
+        // In review/mix mode, 60% Q&A, 40% choice
+        map[c.id] = Math.random() < 0.6 ? "qa" : "choice";
+      }
     });
     setForceTypeMap(map);
   }, []);

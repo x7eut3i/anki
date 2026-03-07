@@ -15,6 +15,9 @@ class AIConfigUpdate(BaseModel):
     max_tokens: int | None = None
     temperature: float | None = None
     max_retries: int | None = None
+    fallback_model: str | None = None
+    fallback_cooldown: int | None = None
+    rpm_limit: int | None = None
     is_enabled: bool | None = None
     auto_explain_wrong: bool | None = None
     auto_generate_mnemonics: bool | None = None
@@ -29,8 +32,12 @@ class AIConfigResponse(BaseModel):
     model: str
     model_pipeline: str = ""
     model_reading: str = ""
+    fallback_model: str = ""
+    fallback_cooldown: int = 600
+    rpm_limit: int = 0
     max_daily_calls: int
     import_batch_size: int = 30
+    import_concurrency: int = 3
     max_tokens: int = 8192
     temperature: float = 0.3
     max_retries: int = 3
@@ -51,6 +58,9 @@ class AIConfigCreate(BaseModel):
     model: str = ""
     model_pipeline: str = ""
     model_reading: str = ""
+    fallback_model: str = ""
+    fallback_cooldown: int = 600
+    rpm_limit: int = 0
     max_daily_calls: int = 50
     import_batch_size: int = 30
     import_concurrency: int = 3

@@ -69,8 +69,12 @@ export default function Flashcard({
   // Reset when card changes & randomly pick from [front/back, ...alternates]
   React.useEffect(() => {
     setSelectedChoice(null);
-    // 60% QA, 40% choice
-    setRandomForceType(Math.random() < 0.6 ? "qa" : "choice");
+    // 实词辨析 cards: always choice; others: 60% QA, 40% choice
+    if (card.category_name === "实词辨析") {
+      setRandomForceType("choice");
+    } else {
+      setRandomForceType(Math.random() < 0.6 ? "qa" : "choice");
+    }
 
     const meta = parseJson<Record<string, any> | null>(card.meta_info, null);
     const alts = meta?.alternate_questions;

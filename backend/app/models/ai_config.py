@@ -14,6 +14,9 @@ class AIConfig(SQLModel, table=True):
     model: str = Field(default="gpt-4o-mini")  # Default model
     model_pipeline: str = Field(default="")  # Model for article pipeline card gen (empty = use default)
     model_reading: str = Field(default="")   # Model for deep reading analysis (empty = use default)
+    fallback_model: str = Field(default="")  # Fallback model when primary model hits 429/errors
+    fallback_cooldown: int = Field(default=600)  # Cooldown in seconds before retrying primary model (default 10min)
+    rpm_limit: int = Field(default=0)  # Requests per minute limit (0 = unlimited)
     max_daily_calls: int = Field(default=50)
     import_batch_size: int = Field(default=30)
     import_concurrency: int = Field(default=3)  # Number of batches processed concurrently during AI import

@@ -398,9 +398,13 @@ async def list_qiushi_issues(
     }
 
 
-class QiushiBackfillRequest(BaseModel):
+class QiushiBackfillIssue(BaseModel):
     issue_url: str
     issue_name: str  # e.g. "2026年 第5期"
+
+
+class QiushiBackfillRequest(BaseModel):
+    issues: list[QiushiBackfillIssue]  # Support multi-issue backfill
 
 
 @router.post("/qiushi-backfill")
@@ -409,16 +413,21 @@ async def qiushi_backfill(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Trigger 求是杂志 backfill for a specific issue.
+    """Trigger 求是杂志 backfill for one or more issues.
 
-    Crawls all articles from the selected issue, then processes them
+    Crawls all articles from the selected issues, then processes them
     through the full pipeline (dedup, analyze, generate cards).
+    Issues are processed sequentially in a single pipeline run.
     """
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
 
-    if not data.issue_url or "qstheory.cn" not in data.issue_url:
-        raise HTTPException(status_code=400, detail="无效的求是期刊URL")
+    if not data.issues:
+        raise HTTPException(status_code=400, detail="请至少选择一期")
+
+    for iss in data.issues:
+        if not iss.issue_url or "qstheory.cn" not in iss.issue_url:
+            raise HTTPException(status_code=400, detail=f"无效的求是期刊URL: {iss.issue_url}")
 
     from app.routers.ingestion import _is_running, _running_log_id
     if _is_running():
@@ -427,15 +436,18 @@ async def qiushi_backfill(
             detail=f"已有抓取任务正在运行（日志 #{_running_log_id}），请等待完成或取消后再试",
         )
 
+    issues_list = [{"issue_url": iss.issue_url, "issue_name": iss.issue_name} for iss in data.issues]
+    issue_names = "、".join(iss.issue_name for iss in data.issues)
+
     import asyncio
     from app.routers.ingestion import _run_qiushi_backfill_internal
     asyncio.get_event_loop().create_task(
-        _run_qiushi_backfill_internal(data.issue_url, data.issue_name)
+        _run_qiushi_backfill_internal(issues_list)
     )
 
     return {
         "ok": True,
-        "message": f"已启动求是杂志回溯抓取: {data.issue_name}",
+        "message": f"已启动求是杂志回溯抓取 ({len(data.issues)} 期): {issue_names}",
     }
 
 

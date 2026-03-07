@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 import httpx
 from sqlmodel import Session, select
@@ -17,6 +18,116 @@ from app.services.ai_logger import log_ai_request, log_ai_response, log_ai_call_
 from app.services.json_repair import repair_json, robust_json_parse
 
 logger = logging.getLogger("anki.ai_pipeline")
+
+# ── RPM Rate Limiter (token bucket, module-level) ──
+_rpm_lock = asyncio.Lock()
+_rpm_tokens: float = 0.0       # available tokens
+_rpm_last_refill: float = 0.0  # last refill timestamp
+_rpm_limit: int = 0            # 0 = unlimited
+
+
+async def _rpm_wait(config) -> None:
+    """Wait if necessary to comply with RPM rate limit.
+
+    Uses a token-bucket approach: refills at rpm_limit tokens per 60s.
+    If no tokens available, sleeps until one becomes available,
+    then re-acquires the lock to atomically claim a token.
+    """
+    global _rpm_tokens, _rpm_last_refill, _rpm_limit
+
+    limit = getattr(config, "rpm_limit", 0) or 0
+    if limit <= 0:
+        return  # No rate limit configured
+
+    while True:
+        wait_time = 0.0
+        async with _rpm_lock:
+            now = time.monotonic()
+
+            # If limit changed, reset bucket
+            if limit != _rpm_limit:
+                _rpm_limit = limit
+                _rpm_tokens = float(limit)
+                _rpm_last_refill = now
+
+            # Refill tokens based on elapsed time
+            elapsed = now - _rpm_last_refill
+            if elapsed > 0:
+                refill = elapsed * (limit / 60.0)
+                _rpm_tokens = min(float(limit), _rpm_tokens + refill)
+                _rpm_last_refill = now
+
+            if _rpm_tokens >= 1.0:
+                _rpm_tokens -= 1.0
+                return  # Got a token, proceed
+
+            # Calculate wait time for one token to become available
+            wait_time = (1.0 - _rpm_tokens) / (limit / 60.0)
+
+        # Sleep outside the lock so other coroutines can also queue up
+        logger.info("RPM rate limit: waiting %.1fs (limit=%d/min)", wait_time, limit)
+        await asyncio.sleep(wait_time)
+        # Loop back to re-acquire lock and try to claim a token
+
+# ── Fallback model cooldown state (module-level, shared across all requests) ──
+_fallback_active_until: datetime | None = None
+_fallback_reason: str = ""
+_fallback_model_name: str = ""  # cached from config at activation time
+
+
+def _should_use_fallback() -> bool:
+    """Check if we should currently use the fallback model."""
+    if _fallback_active_until is None:
+        return False
+    return datetime.now(timezone.utc) < _fallback_active_until
+
+
+def _activate_fallback(config, reason: str) -> str | None:
+    """Activate fallback model for the configured cooldown period.
+
+    Returns the fallback model name if activated, or None if no fallback configured.
+    """
+    global _fallback_active_until, _fallback_reason, _fallback_model_name
+    fallback = getattr(config, "fallback_model", "") or ""
+    if not fallback:
+        return None
+    cooldown = getattr(config, "fallback_cooldown", 600) or 600
+    _fallback_active_until = datetime.now(timezone.utc).replace(
+        second=datetime.now(timezone.utc).second
+    )
+    from datetime import timedelta
+    _fallback_active_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
+    _fallback_reason = reason
+    _fallback_model_name = fallback
+    logger.warning(
+        "Fallback model activated: %s (reason: %s, cooldown: %ds)",
+        fallback, reason, cooldown,
+    )
+    return fallback
+
+
+def _get_effective_model(config, intended_model: str) -> str:
+    """Get the effective model to use, considering fallback state."""
+    if _should_use_fallback() and _fallback_model_name:
+        logger.info(
+            "Using fallback model %s (until %s, reason: %s)",
+            _fallback_model_name, _fallback_active_until, _fallback_reason,
+        )
+        return _fallback_model_name
+    return intended_model
+
+
+def get_fallback_status() -> dict:
+    """Get current fallback status for API/UI inspection."""
+    if _should_use_fallback():
+        remaining = (_fallback_active_until - datetime.now(timezone.utc)).total_seconds()  # type: ignore
+        return {
+            "active": True,
+            "fallback_model": _fallback_model_name,
+            "reason": _fallback_reason,
+            "remaining_seconds": max(0, int(remaining)),
+        }
+    return {"active": False}
 
 
 def _cfg_temp(config) -> float:
@@ -37,21 +148,71 @@ async def _ai_call_with_retry(
     max_retries: int = 3,
     timeout: float = 120.0,
     feature: str = "ai_call",
+    config=None,
 ) -> dict:
-    """Make an AI API call with retry and exponential backoff.
+    """Make an AI API call with retry, exponential backoff, and automatic fallback.
+
+    If config is provided and has a fallback_model, on 429/5xx errors the system
+    will switch to the fallback model for a cooldown period. This affects all
+    subsequent AI calls across the application.
 
     Returns the parsed JSON response dict.
     Raises on total failure after all retries.
     """
     last_error = None
+
+    # Apply RPM rate limiting
+    if config:
+        await _rpm_wait(config)
+
+    # Apply fallback model if active
+    if config and _should_use_fallback() and _fallback_model_name:
+        payload = {**payload, "model": _fallback_model_name}
+        logger.info("%s: using fallback model %s", feature, _fallback_model_name)
+
     for attempt in range(max_retries):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(url, json=payload, headers=headers)
+
+                # Check for rate limit or server errors that warrant fallback
+                if resp.status_code in (429, 500, 502, 503, 529) and config:
+                    error_reason = f"HTTP {resp.status_code}"
+                    try:
+                        err_body = resp.json()
+                        if "error" in err_body:
+                            err_obj = err_body["error"]
+                            error_reason = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
+                    except Exception:
+                        pass
+
+                    fallback_name = _activate_fallback(config, f"{error_reason} (HTTP {resp.status_code})")
+                    if fallback_name and payload.get("model") != fallback_name:
+                        # Retry immediately with fallback model
+                        payload = {**payload, "model": fallback_name}
+                        logger.warning(
+                            "%s: HTTP %d, switching to fallback model %s and retrying",
+                            feature, resp.status_code, fallback_name,
+                        )
+                        continue
+
                 resp.raise_for_status()
             return resp.json()
         except Exception as err:
             last_error = err
+
+            # Check if this is an HTTP error that warrants fallback activation
+            if config and isinstance(err, httpx.HTTPStatusError):
+                status_code = err.response.status_code
+                if status_code in (429, 500, 502, 503, 529):
+                    fallback_name = _activate_fallback(config, f"HTTP {status_code}")
+                    if fallback_name and payload.get("model") != fallback_name:
+                        payload = {**payload, "model": fallback_name}
+                        logger.warning(
+                            "%s: activated fallback model %s after HTTP %d",
+                            feature, fallback_name, status_code,
+                        )
+
             if attempt < max_retries - 1:
                 logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
                 await asyncio.sleep(2 * (attempt + 1))
@@ -104,18 +265,23 @@ async def ai_cleanup_content(
 ) -> str:
     """Clean up raw article text using AI.
 
-    Returns cleaned text string, or original body_text on failure.
+    Returns cleaned text, or original body_text on failure.
     """
-    cleanup_model = config.model or "gpt-4o-mini"
+    cleanup_model = _get_effective_model(config, config.model or "gpt-4o-mini")
     cleanup_sys = (
-        "你是一个文本格式化助手。你的任务是将从网页抓取的原始文本整理成排版整洁、易于阅读的纯文本。\n"
+        "你是一个文本格式化助手。你的任务是将从网页抓取的原始文本整理成排版整洁、易于阅读的Markdown格式文本。\n"
         "规则：\n"
         "1. 保留文章的完整内容，不要删减、概括或改写任何实质内容\n"
         "2. 去除网页导航、广告、版权声明、编辑信息等非正文内容\n"
         "3. 正确分段：每个自然段之间用一个空行分隔\n"
         "4. 去除重复的标题、乱码、HTML残留\n"
-        "5. 如果有小标题/子标题，保留并用独立行显示\n"
-        "6. 直接输出整理后的纯文本，不要加任何说明或标记"
+        "5. 格式化要求：\n"
+        "   - 所有格式来源于网页本身，严禁添加任何未在原文中出现的格式元素\n"
+        "   - 文章标题用 # （一级标题）\n"
+        "   - 小标题/子标题用 ## 或 ### （二级/三级标题）\n"
+        "   - 作者、来源、日期等信息保留在标题下方，用 **加粗** 标注\n"
+        "   - 列表项使用 - 或数字列表\n"
+        "6. 直接输出整理后的Markdown格式文本，不要加任何说明、解释或额外标记"
     )
     cleanup_prompt = f"请整理以下从网页抓取的文章文本：\n\n标题：{title}\n\n原始文本：\n{body_text}"
 
@@ -136,6 +302,7 @@ async def ai_cleanup_content(
         "max_tokens": max_tokens,
     }
 
+    cleaned = body_text
     try:
         log_ai_request("content_cleanup", cleanup_model, payload["messages"], temp, max_tokens)
         t0 = time.time()
@@ -144,21 +311,24 @@ async def ai_cleanup_content(
             max_retries=_cfg_max_retries(config),
             timeout=60.0,
             feature="content_cleanup",
+            config=config,
         )
         elapsed_ms = int((time.time() - t0) * 1000)
-        cleaned = _extract_ai_content(result).strip()
+        cleaned_result = _extract_ai_content(result).strip()
         tokens_used = result.get("usage", {}).get("total_tokens", 0)
-        log_ai_response("content_cleanup", cleanup_model, cleaned, tokens_used, elapsed_ms)
+        log_ai_response("content_cleanup", cleanup_model, cleaned_result, tokens_used, elapsed_ms)
         log_ai_call_to_db(
             feature="content_cleanup", model=cleanup_model,
             config_name=config.name, tokens_used=tokens_used,
             elapsed_ms=elapsed_ms, input_preview=cleanup_prompt[:200],
-            output_length=len(cleaned), user_id=user_id,
+            output_length=len(cleaned_result), user_id=user_id,
         )
-        return cleaned if len(cleaned) > 80 else body_text
+        if len(cleaned_result) > 80:
+            cleaned = cleaned_result
     except Exception as e:
         logger.warning("AI content cleanup failed, using original text: %s", e)
-        return body_text
+
+    return cleaned
 
 
 async def ai_analyze_article(
@@ -172,7 +342,7 @@ async def ai_analyze_article(
     from app.services.prompts import ARTICLE_ANALYSIS_SYSTEM_PROMPT, make_article_analysis_prompt
     from app.services.prompt_loader import get_prompt, get_prompt_model
 
-    model = get_prompt_model(session, "article_analysis") or config.model_reading or config.model
+    model = _get_effective_model(config, get_prompt_model(session, "article_analysis") or config.model_reading or config.model)
     system_prompt = get_prompt(session, "article_analysis", ARTICLE_ANALYSIS_SYSTEM_PROMPT)
     user_prompt = make_article_analysis_prompt(title, content)
 
@@ -208,6 +378,7 @@ async def ai_analyze_article(
                 max_retries=1,  # inner retry handled by outer loop for error logging
                 timeout=120.0,
                 feature="article_analysis",
+                config=config,
             )
             elapsed_ms = int((time.time() - t0) * 1000)
             content_text = _extract_ai_content(result)
@@ -259,7 +430,7 @@ async def ai_generate_cards(
     from app.services.prompt_loader import get_prompt, get_prompt_model
     from app.services.dedup_service import DedupService
 
-    model = get_prompt_model(session, "card_system") or config.model_pipeline or config.model
+    model = _get_effective_model(config, get_prompt_model(session, "card_system") or config.model_pipeline or config.model)
     system_prompt = get_prompt(session, "card_system", CARD_SYSTEM_PROMPT)
 
     cats = session.exec(select(Category).where(Category.is_active == True)).all()
@@ -304,6 +475,7 @@ async def ai_generate_cards(
                 max_retries=1,
                 timeout=120.0,
                 feature="card_generation",
+                config=config,
             )
             elapsed_ms = int((time.time() - t0) * 1000)
             content_text = _extract_ai_content(result).strip()

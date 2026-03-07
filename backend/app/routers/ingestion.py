@@ -970,10 +970,11 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
         _running_lock.release()
 
 
-async def _run_qiushi_backfill_internal(issue_url: str, issue_name: str):
-    """Run 求是杂志 backfill pipeline for a specific issue.
+async def _run_qiushi_backfill_internal(issues: list[dict]):
+    """Run 求是杂志 backfill pipeline for one or more issues.
 
-    Similar to the RMRB backfill but crawls a single Qiushi issue.
+    Each dict in issues must contain 'issue_url' and 'issue_name'.
+    Issues are crawled sequentially, then all articles are processed together.
     """
     global _running_log_id, _cancel_requested
 
@@ -1060,15 +1061,21 @@ async def _run_qiushi_backfill_internal(issue_url: str, issue_name: str):
                 total_cards = 0
                 total_errors = 0
 
-                # ═══ Phase 1: Crawl the specific Qiushi issue ═══
-                add_entry("info", "求是杂志", f"开始回溯抓取: {issue_name}")
+                # ═══ Phase 1: Crawl all selected Qiushi issues ═══
+                issue_names = "、".join(iss["issue_name"] for iss in issues)
+                add_entry("info", "求是杂志", f"开始回溯抓取 ({len(issues)} 期): {issue_names}")
 
-                try:
-                    all_articles = await crawl_qiushi_issue(issue_url, issue_name)
-                except Exception as crawl_err:
-                    all_articles = []
-                    add_entry("error", "求是杂志", f"抓取期刊页面失败: {str(crawl_err)[:150]}")
-                    logger.error("Qiushi issue crawl raised: %s", crawl_err)
+                all_articles = []
+                for iss in issues:
+                    if _cancel_requested:
+                        break
+                    try:
+                        arts = await crawl_qiushi_issue(iss["issue_url"], iss["issue_name"])
+                        add_entry("info", "求是杂志", f"{iss['issue_name']}: 发现 {len(arts)} 篇文章")
+                        all_articles.extend(arts)
+                    except Exception as crawl_err:
+                        add_entry("error", "求是杂志", f"{iss['issue_name']} 抓取失败: {str(crawl_err)[:150]}")
+                        logger.error("Qiushi issue crawl raised for %s: %s", iss["issue_name"], crawl_err)
 
                 for art in all_articles:
                     art["source_name"] = "求是杂志"
@@ -1078,7 +1085,7 @@ async def _run_qiushi_backfill_internal(issue_url: str, issue_name: str):
 
                 if total_fetched == 0:
                     add_entry("warn", "求是杂志",
-                              f"未发现文章，请检查期刊URL是否有效: {issue_url[:80]}")
+                              f"所有期刊共未发现文章，请检查期刊URL是否有效")
                     log.status = "error"
                     log.finished_at = datetime.now(timezone.utc)
                     log.updated_at = datetime.now(timezone.utc)
@@ -1087,10 +1094,10 @@ async def _run_qiushi_backfill_internal(issue_url: str, issue_name: str):
                     session.commit()
                     return
 
-                add_entry("info", "求是杂志", f"发现 {total_fetched} 篇文章，开始逐篇处理...")
+                add_entry("info", "求是杂志", f"共发现 {total_fetched} 篇文章，开始逐篇处理...")
 
                 log.articles_fetched = total_fetched
-                log.sources_processed = 1
+                log.sources_processed = len(issues)
                 log.updated_at = datetime.now(timezone.utc)
                 log.log_detail = json.dumps(entries, ensure_ascii=False)
                 session.add(log)

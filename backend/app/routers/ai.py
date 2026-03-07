@@ -42,6 +42,9 @@ def _config_to_response(config: AIConfig) -> AIConfigResponse:
         model=config.model,
         model_pipeline=config.model_pipeline or "",
         model_reading=config.model_reading or "",
+        fallback_model=getattr(config, "fallback_model", "") or "",
+        fallback_cooldown=getattr(config, "fallback_cooldown", 600) or 600,
+        rpm_limit=getattr(config, "rpm_limit", 0) or 0,
         max_daily_calls=config.max_daily_calls,
         import_batch_size=getattr(config, "import_batch_size", 30) or 30,
         import_concurrency=getattr(config, "import_concurrency", 3) or 3,
@@ -393,6 +396,15 @@ def get_usage(
     ai = AIService(session, current_user.id)
     stats = ai.get_usage_stats()
     return AIUsageResponse(**stats)
+
+
+@router.get("/fallback-status")
+def get_fallback_status_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Get current AI model fallback status."""
+    from app.services.ai_pipeline import get_fallback_status
+    return get_fallback_status()
 
 
 @router.post("/batch-enrich")

@@ -284,6 +284,9 @@ export const ai = {
   },
   batchEnrichAsync: (data: { card_ids?: number[]; deck_id?: number; batch_size?: number }, token: string) =>
     request<any>("/api/ai/batch-enrich/async", { method: "POST", body: JSON.stringify(data), token }),
+
+  fallbackStatus: (token: string) =>
+    request<{ active: boolean; fallback_model?: string; reason?: string; remaining_seconds?: number }>("/api/ai/fallback-status", { token }),
 };
 
 // ---------------------------------------------------------------------------
@@ -387,8 +390,8 @@ export const reading = {
       token,
     }),
 
-  delete: (id: number, token: string) =>
-    request<void>(`/api/reading/${id}`, { method: "DELETE", token }),
+  delete: (id: number, token: string, deleteCards?: boolean) =>
+    request<void>(`/api/reading/${id}${deleteCards ? '?delete_cards=true' : ''}`, { method: "DELETE", token }),
 
   createCard: (data: {
     selected_text: string;
@@ -421,8 +424,8 @@ export const reading = {
   reanalyze: (id: number, token: string) =>
     request<any>(`/api/reading/${id}/reanalyze`, { method: "POST", token }),
 
-  batchDelete: (ids: number[], token: string) =>
-    request<{ deleted: number }>("/api/reading/batch-delete", { method: "POST", body: JSON.stringify({ ids }), token }),
+  batchDelete: (ids: number[], token: string, deleteCards?: boolean) =>
+    request<{ deleted: number }>("/api/reading/batch-delete", { method: "POST", body: JSON.stringify({ ids, delete_cards: deleteCards || false }), token }),
 
   batchReanalyze: (ids: number[], token: string) =>
     request<{ success: number; failed: number; total: number }>("/api/reading/batch-reanalyze", { method: "POST", body: JSON.stringify({ ids }), token }),
@@ -483,7 +486,7 @@ export const sources = {
   qiushiIssues: (year: number, token: string) =>
     request<{ year: number; issues: { issue: number; text: string; url: string }[] }>(`/api/sources/qiushi-issues?year=${year}`, { token }),
 
-  qiushiBackfill: (data: { issue_url: string; issue_name: string }, token: string) =>
+  qiushiBackfill: (data: { issues: { issue_url: string; issue_name: string }[] }, token: string) =>
     request<any>("/api/sources/qiushi-backfill", { method: "POST", body: JSON.stringify(data), token }),
 };
 

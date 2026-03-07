@@ -73,7 +73,7 @@ export default function SourcesPage() {
   const [qsYear, setQsYear] = useState(new Date().getFullYear());
   const [qsIssues, setQsIssues] = useState<{ issue: number; text: string; url: string }[]>([]);
   const [qsLoadingIssues, setQsLoadingIssues] = useState(false);
-  const [qsSelectedIssue, setQsSelectedIssue] = useState<{ issue: number; text: string; url: string } | null>(null);
+  const [qsSelectedIssues, setQsSelectedIssues] = useState<Set<number>>(new Set());
   const [qsBackfillLoading, setQsBackfillLoading] = useState(false);
   const [qsResult, setQsResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -207,7 +207,7 @@ export default function SourcesPage() {
     if (!token) return;
     setQsLoadingIssues(true);
     setQsIssues([]);
-    setQsSelectedIssue(null);
+    setQsSelectedIssues(new Set());
     setQsResult(null);
     try {
       const result = await sourcesApi.qiushiIssues(year, token);
@@ -220,12 +220,15 @@ export default function SourcesPage() {
   };
 
   const handleQsBackfill = async () => {
-    if (!token || !qsSelectedIssue) return;
+    if (!token || qsSelectedIssues.size === 0) return;
     setQsBackfillLoading(true);
     setQsResult(null);
     try {
+      const selectedList = qsIssues
+        .filter((iss) => qsSelectedIssues.has(iss.issue))
+        .map((iss) => ({ issue_url: iss.url, issue_name: `${qsYear}年 ${iss.text}` }));
       const result = await sourcesApi.qiushiBackfill(
-        { issue_url: qsSelectedIssue.url, issue_name: `${qsYear}年 ${qsSelectedIssue.text}` },
+        { issues: selectedList },
         token,
       );
       setQsResult({ ok: true, message: result.message });
@@ -590,7 +593,7 @@ export default function SourcesPage() {
                                     onChange={(e) => {
                                       setQsYear(Number(e.target.value));
                                       setQsIssues([]);
-                                      setQsSelectedIssue(null);
+                                      setQsSelectedIssues(new Set());
                                       setQsResult(null);
                                     }}
                                     className="h-8 px-2 rounded-md border border-input bg-background text-xs"
@@ -618,7 +621,7 @@ export default function SourcesPage() {
                                   size="sm"
                                   variant="ghost"
                                   className="h-8 text-xs"
-                                  onClick={() => { setQsOpen(false); setQsResult(null); setQsIssues([]); setQsSelectedIssue(null); }}
+                                  onClick={() => { setQsOpen(false); setQsResult(null); setQsIssues([]); setQsSelectedIssues(new Set()); }}
                                 >
                                   取消
                                 </Button>
@@ -626,26 +629,60 @@ export default function SourcesPage() {
                               {/* Step 2: Issue selector */}
                               {qsIssues.length > 0 && (
                                 <div className="space-y-2">
-                                  <p className="text-xs font-medium text-muted-foreground">
-                                    {qsYear}年 共 {qsIssues.length} 期，选择一期：
-                                  </p>
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-xs font-medium text-muted-foreground">
+                                      {qsYear}年 共 {qsIssues.length} 期，选择要抓取的期数（可多选）：
+                                    </p>
+                                    <div className="flex items-center gap-1.5">
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 text-[10px] px-2"
+                                        onClick={() => setQsSelectedIssues(new Set(qsIssues.map((i) => i.issue)))}
+                                      >
+                                        全选
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-6 text-[10px] px-2"
+                                        onClick={() => setQsSelectedIssues(new Set())}
+                                      >
+                                        清空
+                                      </Button>
+                                    </div>
+                                  </div>
                                   <div className="flex flex-wrap gap-1.5">
                                     {qsIssues.map((iss) => (
                                       <Button
                                         key={iss.issue}
                                         size="sm"
-                                        variant={qsSelectedIssue?.issue === iss.issue ? "default" : "outline"}
+                                        variant={qsSelectedIssues.has(iss.issue) ? "default" : "outline"}
                                         className="h-7 text-xs px-2.5"
-                                        onClick={() => { setQsSelectedIssue(iss); setQsResult(null); }}
+                                        onClick={() => {
+                                          setQsSelectedIssues((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(iss.issue)) {
+                                              next.delete(iss.issue);
+                                            } else {
+                                              next.add(iss.issue);
+                                            }
+                                            return next;
+                                          });
+                                          setQsResult(null);
+                                        }}
                                       >
                                         {iss.text}
                                       </Button>
                                     ))}
                                   </div>
-                                  {qsSelectedIssue && (
+                                  {qsSelectedIssues.size > 0 && (
                                     <div className="flex items-center gap-2 pt-1">
                                       <span className="text-xs text-muted-foreground">
-                                        已选: <span className="font-medium text-foreground">{qsSelectedIssue.text}</span>
+                                        已选: <span className="font-medium text-foreground">{qsSelectedIssues.size} 期</span>
+                                        <span className="text-muted-foreground/70 ml-1">
+                                          ({qsIssues.filter((i) => qsSelectedIssues.has(i.issue)).map((i) => i.text).join("、")})
+                                        </span>
                                       </span>
                                       <Button
                                         size="sm"

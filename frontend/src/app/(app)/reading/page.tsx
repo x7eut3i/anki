@@ -153,27 +153,28 @@ function AnnotatedText({
   const [activePopup, setActivePopup] = useState<number | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 
-  // Reposition popup to stay within viewport
+  // Reposition popup to stay within viewport — always use fixed centering
   useEffect(() => {
     if (activePopup === null || !popupRef.current) return;
     const el = popupRef.current;
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+
+    // Always use fixed positioning, horizontally centered
+    el.style.position = "fixed";
+    el.style.left = "50%";
+    el.style.transform = "translateX(-50%)";
+    el.style.right = "auto";
+    el.style.width = `${Math.min(360, vw - 32)}px`;
+    el.style.maxHeight = `${Math.min(vh * 0.6, 400)}px`;
+    el.style.overflowY = "auto";
+    el.style.zIndex = "9999";
+
+    // Vertically: place below click point if possible, otherwise above
     const rect = el.getBoundingClientRect();
-    // Fix right overflow
-    if (rect.right > window.innerWidth - 8) {
-      el.style.left = "auto";
-      el.style.right = "0";
-    }
-    // Fix left overflow
-    if (rect.left < 8) {
-      el.style.left = "0";
-      el.style.right = "auto";
-    }
-    // Fix bottom overflow — show above instead
-    if (rect.bottom > window.innerHeight - 8) {
-      el.style.top = "auto";
-      el.style.bottom = "100%";
-      el.style.marginBottom = "4px";
-      el.style.marginTop = "0";
+    if (rect.bottom > vh - 8) {
+      // Too close to bottom, move up
+      el.style.top = `${Math.max(16, vh - rect.height - 16)}px`;
     }
   }, [activePopup]);
 
@@ -207,85 +208,158 @@ function AnnotatedText({
     }
   }
 
-  // Build segments
-  const segments: { text: string; highlight?: Highlight; index?: number }[] = [];
-  let cursor = 0;
-  for (const p of filtered) {
-    if (p.start > cursor) {
-      segments.push({ text: content.slice(cursor, p.start) });
+  // ── Step 1: Parse content into lines with types and display ranges ──
+  interface LineInfo {
+    rawStart: number;     // char position of line start in content
+    rawEnd: number;       // char position of line end
+    displayStart: number; // where displayable text starts (after # markers)
+    type: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'text' | 'blank';
+  }
+  const lineInfos: LineInfo[] = [];
+  let charPos = 0;
+  for (const rawLine of content.split('\n')) {
+    const lineStart = charPos;
+    const lineEnd = charPos + rawLine.length;
+    const hMatch = rawLine.match(/^(#{1,6})\s/);
+    if (hMatch) {
+      const level = hMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
+      lineInfos.push({
+        rawStart: lineStart, rawEnd: lineEnd,
+        displayStart: lineStart + hMatch[0].length,
+        type: `h${level}` as LineInfo['type'],
+      });
+    } else if (rawLine.trim() === '') {
+      lineInfos.push({ rawStart: lineStart, rawEnd: lineEnd, displayStart: lineStart, type: 'blank' });
+    } else {
+      lineInfos.push({ rawStart: lineStart, rawEnd: lineEnd, displayStart: lineStart, type: 'text' });
     }
-    segments.push({ text: p.highlight.text, highlight: p.highlight, index: p.index });
-    cursor = p.end;
+    charPos = lineEnd + 1; // +1 for '\n'
   }
-  if (cursor < content.length) {
-    segments.push({ text: content.slice(cursor) });
-  }
+
+  // ── Step 2: Render **bold** markers as <strong> elements ──
+  const renderBold = (text: string): React.ReactNode => {
+    const parts = text.split(/(\*\*(?:[^*]|\*(?!\*))+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+      }
+      return part;
+    });
+  };
+
+  // ── Step 3: Heading class map ──
+  const headingCls: Record<string, string> = {
+    h1: 'text-lg font-bold mt-4 mb-1',
+    h2: 'text-base font-bold mt-3 mb-1',
+    h3: 'text-sm font-semibold mt-2 mb-1',
+    h4: 'text-sm font-semibold mt-2 mb-1',
+    h5: 'text-sm font-semibold mt-1 mb-1',
+    h6: 'text-sm font-semibold mt-1 mb-1',
+  };
 
   return (
     <div className="relative leading-[2] text-[15px]">
-      {segments.map((seg, i) => {
-        if (!seg.highlight) {
-          return (
-            <span key={i} className="whitespace-pre-wrap">
-              {seg.text}
-            </span>
-          );
+      {lineInfos.map((line, li) => {
+        if (line.type === 'blank') {
+          return <div key={li} className="h-2" />;
         }
 
-        const color = COLOR_MAP[seg.highlight.color] || "#3b82f6";
-        const isActive = activePopup === seg.index;
-
-        return (
-          <span key={i} className="relative inline">
-            <span
-              className="cursor-pointer transition-all duration-200 border-b-2 hover:bg-opacity-20"
-              style={{
-                borderColor: color,
-                backgroundColor: isActive ? `${color}20` : "transparent",
-              }}
-              onClick={() => setActivePopup(isActive ? null : (seg.index ?? null))}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.backgroundColor = `${color}15`;
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
-                }
-              }}
-            >
-              {seg.text}
-            </span>
-
-            {/* Popup annotation */}
-            {isActive && (
-              <span
-                ref={popupRef}
-                className="absolute z-50 left-0 top-full mt-1 w-[min(20rem,calc(100vw-2rem))] bg-card border rounded-xl shadow-xl p-4 text-sm animate-in fade-in slide-in-from-top-2 duration-200"
-                style={{ borderTopColor: color, borderTopWidth: 3 }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span className="flex items-center gap-2 mb-2">
-                  <span
-                    className="text-[11px] text-white px-2 py-0.5 rounded-full font-medium"
-                    style={{ backgroundColor: color }}
-                  >
-                    {TYPE_LABELS[seg.highlight.type] || seg.highlight.type}
-                  </span>
-                  <button
-                    className="ml-auto text-muted-foreground hover:text-foreground"
-                    onClick={() => setActivePopup(null)}
-                    title="关闭"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </span>
-                <span className="block text-muted-foreground leading-relaxed">
-                  {seg.highlight.annotation}
-                </span>
-              </span>
-            )}
-          </span>
+        // Find highlights overlapping this line's displayable range
+        const lineHighlights = filtered.filter(
+          p => p.start < line.rawEnd && p.end > line.displayStart
         );
+
+        // Build per-line segments within displayable range
+        type LineSeg = { text: string; highlight?: Highlight; hIndex?: number };
+        const lineSegs: LineSeg[] = [];
+        let cur = line.displayStart;
+        for (const h of lineHighlights) {
+          const segStart = Math.max(h.start, line.displayStart);
+          const segEnd = Math.min(h.end, line.rawEnd);
+          if (segStart > cur) {
+            lineSegs.push({ text: content.slice(cur, segStart) });
+          }
+          lineSegs.push({
+            text: content.slice(segStart, segEnd),
+            highlight: h.highlight,
+            hIndex: h.index,
+          });
+          cur = segEnd;
+        }
+        if (cur < line.rawEnd) {
+          lineSegs.push({ text: content.slice(cur, line.rawEnd) });
+        }
+
+        // Render each segment (highlighted or plain)
+        const inner = lineSegs.map((seg, si) => {
+          if (seg.highlight) {
+            const color = COLOR_MAP[seg.highlight.color] || "#3b82f6";
+            const isActive = activePopup === seg.hIndex;
+            return (
+              <span key={si} className="relative inline">
+                <span
+                  className="cursor-pointer transition-all duration-200 border-b-2 hover:bg-opacity-20"
+                  style={{
+                    borderColor: color,
+                    backgroundColor: isActive ? `${color}20` : "transparent",
+                  }}
+                  onClick={() => setActivePopup(isActive ? null : (seg.hIndex ?? null))}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.backgroundColor = `${color}15`;
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                    }
+                  }}
+                >
+                  {seg.text}
+                </span>
+                {isActive && (
+                  <>
+                    <span
+                      className="fixed inset-0 bg-black/20 z-[9998]"
+                      onClick={() => setActivePopup(null)}
+                    />
+                    <span
+                      ref={popupRef}
+                      className="fixed z-[9999] bg-card border rounded-xl shadow-xl p-4 text-sm animate-in fade-in slide-in-from-top-2 duration-200"
+                      style={{ borderTopColor: color, borderTopWidth: 3, top: "30%" }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="flex items-center gap-2 mb-2">
+                        <span
+                          className="text-[11px] text-white px-2 py-0.5 rounded-full font-medium"
+                          style={{ backgroundColor: color }}
+                        >
+                          {TYPE_LABELS[seg.highlight.type] || seg.highlight.type}
+                        </span>
+                        <button
+                          className="ml-auto text-muted-foreground hover:text-foreground"
+                          onClick={() => setActivePopup(null)}
+                          title="关闭"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                      <span className="block text-muted-foreground leading-relaxed">
+                        {seg.highlight.annotation}
+                      </span>
+                    </span>
+                  </>
+                )}
+              </span>
+            );
+          }
+          // Non-highlighted: render bold markers
+          return <span key={si}>{renderBold(seg.text)}</span>;
+        });
+
+        // Wrap in heading or paragraph block
+        if (line.type.startsWith('h')) {
+          return <div key={li} className={headingCls[line.type] || headingCls.h3}>{inner}</div>;
+        }
+        return <div key={li}>{inner}</div>;
       })}
     </div>
   );
@@ -662,6 +736,180 @@ function StructuredAnalysis({ data }: { data: AnalysisJSON }) {
   );
 }
 
+/* ── Exam Prep Tab (collapsible sections) ── */
+function ExamPrepTab({
+  relatedCards,
+  expandedCardId,
+  setExpandedCardId,
+  setRelatedCards,
+  detail,
+  token,
+  showToast,
+  analysisJson,
+}: {
+  relatedCards: any[];
+  expandedCardId: number | null;
+  setExpandedCardId: (id: number | null) => void;
+  setRelatedCards: React.Dispatch<React.SetStateAction<any[]>>;
+  detail: { id: number; source_url: string };
+  token: string | null;
+  showToast: (msg: string, type: "success" | "error" | "info") => void;
+  analysisJson: AnalysisJSON;
+}) {
+  const [cardsOpen, setCardsOpen] = useState(true);
+  const [examOpen, setExamOpen] = useState(true);
+
+  return (
+    <div className="space-y-4">
+      {/* Related Cards - collapsible */}
+      <section className="rounded-lg border overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between px-4 py-3 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+          onClick={() => setCardsOpen(!cardsOpen)}
+        >
+          <h3 className="text-base font-bold flex items-center gap-2">
+            <Layers className="h-4 w-4 text-primary" />
+            关联卡片 ({relatedCards.length})
+          </h3>
+          <span className={`transition-transform duration-200 text-muted-foreground ${cardsOpen ? "rotate-180" : ""}`}>▾</span>
+        </button>
+        {cardsOpen && (
+          <div className="p-3 space-y-2">
+            {relatedCards.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">暂无关联卡片</p>
+            ) : (
+              relatedCards.map((card: any) => {
+                const isExpanded = expandedCardId === card.id;
+                const visibleTags = card.tags_list?.filter((tag: any) => !isHiddenTag(tag.name)) || [];
+                return (
+                  <div
+                    key={card.id}
+                    className="rounded-lg border text-sm hover:bg-muted/30 transition-colors cursor-pointer"
+                    onClick={() => setExpandedCardId(isExpanded ? null : card.id)}
+                  >
+                    <div className="flex items-start gap-2 px-3 py-2">
+                      <span className={`transition-transform text-xs text-muted-foreground mt-0.5 shrink-0 ${isExpanded ? "rotate-90" : ""}`}>▸</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {card.category_name && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                              📂 {card.category_name}
+                            </Badge>
+                          )}
+                          {visibleTags.map((tag: any) => (
+                            <Badge
+                              key={tag.id}
+                              className="text-[10px] px-1.5 py-0"
+                              style={{ backgroundColor: tag.color || '#6366f1', color: '#fff' }}
+                            >
+                              {tag.name}
+                            </Badge>
+                          ))}
+                        </div>
+                        <span className={`font-medium ${isExpanded ? "" : "line-clamp-2"}`}>{card.front}</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 shrink-0 text-destructive hover:text-destructive"
+                        title="删除此卡片"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!token || !confirm("确定删除此卡片？")) return;
+                          try {
+                            await reading.deleteArticleCard(detail.id, card.id, token);
+                            setRelatedCards((prev: any[]) => prev.filter((c: any) => c.id !== card.id));
+                          } catch (err: any) {
+                            showToast(err.message || "删除失败", "error");
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                        <CardDetailPanel card={card} />
+                        {token && <CardTagManager cardId={card.id} token={token} onTagsChange={(tags) => {
+                          setRelatedCards((prev: any[]) => prev.map((c: any) =>
+                            c.id === card.id ? { ...c, tags_list: tags } : c
+                          ));
+                        }} />}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Exam Points - collapsible */}
+      {analysisJson?.exam_points && (
+        <section className="rounded-lg border overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+            onClick={() => setExamOpen(!examOpen)}
+          >
+            <h3 className="text-base font-bold">🎯 考试要点</h3>
+            <span className={`transition-transform duration-200 text-muted-foreground ${examOpen ? "rotate-180" : ""}`}>▾</span>
+          </button>
+          {examOpen && (
+            <div className="p-4 grid gap-3">
+              {analysisJson.exam_points.essay_angles && analysisJson.exam_points.essay_angles.length > 0 && (
+                <div className="bg-muted/30 rounded-lg border p-4">
+                  <h4 className="text-sm font-semibold mb-2">📝 申论角度</h4>
+                  <div className="space-y-3">
+                    {analysisJson.exam_points.essay_angles.map((item: any, i: number) => {
+                      const isObj = typeof item === "object" && item !== null;
+                      const text = isObj ? item.angle : item;
+                      const ref = isObj ? item.reference_answer : null;
+                      return (
+                        <div key={i}>
+                          <div className="text-sm text-muted-foreground flex gap-2">
+                            <span className="text-primary shrink-0">•</span> {text}
+                          </div>
+                          {ref && <RefAnswer answer={ref} />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {analysisJson.exam_points.possible_questions && analysisJson.exam_points.possible_questions.length > 0 && (
+                <div className="bg-muted/30 rounded-lg border p-4">
+                  <h4 className="text-sm font-semibold mb-2">❓ 可能考法</h4>
+                  <div className="space-y-3">
+                    {analysisJson.exam_points.possible_questions.map((item: any, i: number) => {
+                      const isObj = typeof item === "object" && item !== null;
+                      const text = isObj ? item.question : item;
+                      const qtype = isObj ? item.question_type : null;
+                      const ref = isObj ? item.reference_answer : null;
+                      return (
+                        <div key={i}>
+                          <div className="text-sm text-muted-foreground flex gap-2">
+                            <span className="text-primary shrink-0">•</span>
+                            <span>{text}</span>
+                            {qtype && (
+                              <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded shrink-0">{qtype}</span>
+                            )}
+                          </div>
+                          {ref && <RefAnswer answer={ref} />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
 /* ── Main Page ── */
 export default function ReadingPage() {
   const { token } = useAuthStore();
@@ -715,7 +963,7 @@ export default function ReadingPage() {
   const [urlInput, setUrlInput] = useState("");
 
   // Active tab in detail view
-  const [activeTab, setActiveTab] = useState<"annotated" | "analysis">("annotated");
+  const [activeTab, setActiveTab] = useState<"annotated" | "analysis" | "exam">("annotated");
 
   // AI Chat
   const [showChat, setShowChat] = useState(false);
@@ -773,6 +1021,20 @@ export default function ReadingPage() {
 
   useEffect(() => { fetchList(); }, [fetchList]);
 
+  // Handle browser back button: close detail when article_id is removed from URL
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      if (!params.get("article_id") && detail) {
+        setDetail(null);
+        setShowChat(false);
+        fetchList();
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [detail, fetchList]);
+
   // Load tags for filter dropdown
   useEffect(() => {
     if (!token) return;
@@ -783,6 +1045,11 @@ export default function ReadingPage() {
   const openDetail = async (id: number) => {
     if (!token) return;
     setLoadingDetail(true);
+    // Push article_id to URL for browser back button support
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("article_id") !== String(id)) {
+      router.push(`/reading?article_id=${id}`, { scroll: false });
+    }
     try {
       const data = await reading.get(id, token);
       setDetail(data);
@@ -841,13 +1108,49 @@ export default function ReadingPage() {
     }
   };
 
+  // Delete confirmation dialog (supports single and batch)
+  const [deleteDialog, setDeleteDialog] = useState<{ ids: number[]; cardCount: number } | null>(null);
+  const [deleteWithCards, setDeleteWithCards] = useState(false);
+
   /* ── Delete ── */
   const handleDelete = async (id: number) => {
-    if (!token || !confirm("确定要删除这篇精读分析吗？")) return;
-    await reading.delete(id, token);
-    setItems((prev) => prev.filter((i) => i.id !== id));
-    setTotal((t) => t - 1);
-    if (detail?.id === id) setDetail(null);
+    if (!token) return;
+    // If we have related cards loaded for this article, use that count
+    const cardCount = detail?.id === id ? relatedCards.length : -1; // -1 = unknown, show checkbox
+    setDeleteWithCards(false);
+    setDeleteDialog({ ids: [id], cardCount });
+  };
+
+  const handleBatchDelete = () => {
+    if (!token || selectedIds.size === 0) return;
+    setDeleteWithCards(false);
+    setDeleteDialog({ ids: Array.from(selectedIds), cardCount: -1 });
+  };
+
+  const confirmDelete = async () => {
+    if (!token || !deleteDialog) return;
+    try {
+      if (deleteDialog.ids.length === 1) {
+        // Single delete
+        await reading.delete(deleteDialog.ids[0], token, deleteWithCards);
+        setItems((prev) => prev.filter((i) => i.id !== deleteDialog.ids[0]));
+        setTotal((t) => t - 1);
+        if (detail?.id === deleteDialog.ids[0]) {
+          setDetail(null);
+          router.back();
+        }
+        showToast(deleteWithCards ? "已删除文章及关联卡片" : "已删除文章", "success");
+      } else {
+        // Batch delete
+        const res = await reading.batchDelete(deleteDialog.ids, token, deleteWithCards);
+        showToast(`已删除 ${res.deleted} 篇文章${deleteWithCards ? "及关联卡片" : ""}`, "success");
+        fetchList();
+      }
+    } catch (err: any) {
+      showToast(err.message || "删除失败", "error");
+    } finally {
+      setDeleteDialog(null);
+    }
   };
 
   /* ── Create ── */
@@ -1026,13 +1329,9 @@ export default function ReadingPage() {
             {/* Back */}
             <div className="flex items-center gap-3">
               <Button variant="ghost" size="sm" onClick={() => {
-                if (cameFromExternal) {
-                  router.back();
-                } else {
-                  setDetail(null);
-                  setShowChat(false);
-                  fetchList();
-                }
+                setDetail(null);
+                setShowChat(false);
+                router.back();
               }}>
                 <ChevronLeft className="h-4 w-4 mr-1" /> 返回列表
               </Button>
@@ -1206,6 +1505,15 @@ export default function ReadingPage() {
                       </a>
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => handleDelete(detail.id)}
+                    title="删除文章"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1227,6 +1535,14 @@ export default function ReadingPage() {
                 onClick={() => setActiveTab("analysis")}
               >
                 ✨ 精读分析
+              </button>
+              <button
+                className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === "exam" ? "bg-card shadow text-foreground" : "text-muted-foreground"
+                }`}
+                onClick={() => setActiveTab("exam")}
+              >
+                📚 考试备考
               </button>
             </div>
 
@@ -1255,11 +1571,11 @@ export default function ReadingPage() {
                 highlights.length > 0 ? (
                   <AnnotatedText content={cleanContent(detail.content)} highlights={highlights} />
                 ) : (
-                  <div className="prose prose-sm max-w-none whitespace-pre-wrap leading-[1.9] text-[15px] reading-content">
-                    {cleanContent(detail.content)}
+                  <div className="prose prose-sm max-w-none leading-[1.9] text-[15px] reading-content">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanContent(detail.content)}</ReactMarkdown>
                   </div>
                 )
-              ) : (
+              ) : activeTab === "analysis" ? (
                 detail.analysis_json && Object.keys(detail.analysis_json).length > 0 ? (
                   <StructuredAnalysis data={detail.analysis_json} />
                 ) : (
@@ -1268,6 +1584,18 @@ export default function ReadingPage() {
                     dangerouslySetInnerHTML={{ __html: detail.analysis_html }}
                   />
                 )
+              ) : (
+                /* Exam Prep tab */
+                <ExamPrepTab
+                  relatedCards={relatedCards}
+                  expandedCardId={expandedCardId}
+                  setExpandedCardId={setExpandedCardId}
+                  setRelatedCards={setRelatedCards}
+                  detail={detail}
+                  token={token}
+                  showToast={showToast}
+                  analysisJson={detail.analysis_json}
+                />
               )}
             </div>
 
@@ -1362,88 +1690,6 @@ export default function ReadingPage() {
               </div>
             )}
 
-            {/* Related cards from this article */}
-            {relatedCards.length > 0 && (
-              <div className="bg-card rounded-xl border">
-                <button
-                  className="w-full flex items-center justify-between px-5 py-3 text-sm font-medium hover:bg-muted/50 transition-colors"
-                  onClick={() => setShowRelatedCards(!showRelatedCards)}
-                >
-                  <span className="flex items-center gap-2">
-                    <Layers className="h-4 w-4 text-primary" />
-                    本文关联卡片 ({relatedCards.length})
-                  </span>
-                  <span className={`transition-transform ${showRelatedCards ? "rotate-180" : ""}`}>▾</span>
-                </button>
-                {showRelatedCards && (
-                  <div className="border-t px-5 py-3 space-y-2">
-                    {relatedCards.map((card: any) => {
-                      const isExpanded = expandedCardId === card.id;
-                      const visibleTags = card.tags_list?.filter((tag: any) => !isHiddenTag(tag.name)) || [];
-                      return (
-                        <div
-                          key={card.id}
-                          className="rounded-lg border text-sm hover:bg-muted/30 transition-colors cursor-pointer"
-                          onClick={() => setExpandedCardId(isExpanded ? null : card.id)}
-                        >
-                          <div className="flex items-start gap-2 px-3 py-2">
-                            <span className={`transition-transform text-xs text-muted-foreground mt-0.5 shrink-0 ${isExpanded ? "rotate-90" : ""}`}>▸</span>
-                            <div className="flex-1 min-w-0">
-                              {/* Category + Tags */}
-                              <div className="flex flex-wrap gap-1 mb-1">
-                                {card.category_name && (
-                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                    📂 {card.category_name}
-                                  </Badge>
-                                )}
-                                {visibleTags.map((tag: any) => (
-                                  <Badge
-                                    key={tag.id}
-                                    className="text-[10px] px-1.5 py-0"
-                                    style={{ backgroundColor: tag.color || '#6366f1', color: '#fff' }}
-                                  >
-                                    {tag.name}
-                                  </Badge>
-                                ))}
-                              </div>
-                              <span className={`font-medium ${isExpanded ? "" : "line-clamp-2"}`}>{card.front}</span>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 shrink-0 text-destructive hover:text-destructive"
-                              title="删除此卡片"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                if (!token || !confirm("确定删除此卡片？")) return;
-                                try {
-                                  await reading.deleteArticleCard(detail.id, card.id, token);
-                                  setRelatedCards((prev: any[]) => prev.filter((c: any) => c.id !== card.id));
-                                } catch (err: any) {
-                                  showToast(err.message || "删除失败", "error");
-                                }
-                              }}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          {isExpanded && (
-                            <div className="border-t px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                              <CardDetailPanel card={card} />
-                              {token && <CardTagManager cardId={card.id} token={token} onTagsChange={(tags) => {
-                                setRelatedCards((prev: any[]) => prev.map((c: any) =>
-                                  c.id === card.id ? { ...c, tags_list: tags } : c
-                                ));
-                              }} />}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
 
@@ -1455,6 +1701,46 @@ export default function ReadingPage() {
               content={detail.content}
               onClose={() => setShowChat(false)}
             />
+          </div>
+        )}
+
+        {/* Delete confirmation dialog (also visible in detail view) */}
+        {deleteDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-card rounded-xl border shadow-2xl p-6 mx-4 max-w-sm w-full space-y-4 animate-in fade-in zoom-in-95 duration-200">
+              <h3 className="text-base font-semibold">确定删除此精读分析？</h3>
+              <p className="text-sm text-muted-foreground">删除后无法恢复。</p>
+              <label className="flex items-center gap-2 cursor-pointer text-sm p-2 rounded-lg bg-muted/50 border">
+                <input
+                  type="checkbox"
+                  checked={deleteWithCards}
+                  onChange={(e) => setDeleteWithCards(e.target.checked)}
+                  className="rounded border-input"
+                />
+                <span>同时删除关联卡片{deleteDialog.cardCount > 0 ? `（${deleteDialog.cardCount} 张）` : ""}</span>
+              </label>
+              <div className="flex gap-2 justify-end pt-2">
+                <Button variant="outline" size="sm" onClick={() => setDeleteDialog(null)}>
+                  取消
+                </Button>
+                <Button variant="destructive" size="sm" onClick={confirmDelete}>
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  {deleteWithCards ? "删除文章和卡片" : "仅删除文章"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast notification */}
+        {toast && (
+          <div className={cn(
+            "fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-lg shadow-lg text-sm font-medium transition-all animate-in slide-in-from-bottom-4 fade-in duration-300",
+            toast.type === "success" && "bg-green-600 text-white",
+            toast.type === "error" && "bg-red-600 text-white",
+            toast.type === "info" && "bg-blue-600 text-white",
+          )}>
+            {toast.type === "success" && "✅ "}{toast.type === "error" && "❌ "}{toast.message}
           </div>
         )}
       </div>
@@ -1526,9 +1812,9 @@ export default function ReadingPage() {
               if (!file || !token) return;
               try {
                 const res = await reading.importArticles(file, token);
-                alert(`导入完成：新增 ${res.imported || 0} 篇，跳过 ${res.skipped || 0} 篇`);
+                showToast(`导入完成：新增 ${res.imported || 0} 篇，跳过 ${res.skipped || 0} 篇`, "success");
                 fetchList();
-              } catch (err: any) { alert(err.message || "导入失败"); }
+              } catch (err: any) { showToast(err.message || "导入失败", "error"); }
             };
             input.click();
           }}>
@@ -1764,10 +2050,10 @@ export default function ReadingPage() {
                       setBatchReanalyzing(true);
                       try {
                         const res = await reading.batchReanalyze(Array.from(selectedIds), token);
-                        alert(`重新分析完成：成功 ${res.success} 篇，失败 ${res.failed} 篇`);
+                        showToast(`重新分析完成：成功 ${res.success} 篇，失败 ${res.failed} 篇`, "success");
                         fetchList();
                       } catch (e: any) {
-                        alert("批量分析失败：" + (e.message || "未知错误"));
+                        showToast("批量分析失败：" + (e.message || "未知错误"), "error");
                       } finally {
                         setBatchReanalyzing(false);
                       }
@@ -1780,17 +2066,7 @@ export default function ReadingPage() {
                     size="sm"
                     variant="outline"
                     className="h-7 text-xs text-red-600 border-red-200"
-                    onClick={async () => {
-                      if (!token || selectedIds.size === 0) return;
-                      if (!confirm(`确定删除选中的 ${selectedIds.size} 篇文章？`)) return;
-                      try {
-                        const res = await reading.batchDelete(Array.from(selectedIds), token);
-                        alert(`已删除 ${res.deleted} 篇文章`);
-                        fetchList();
-                      } catch (e: any) {
-                        alert("批量删除失败：" + (e.message || "未知错误"));
-                      }
-                    }}
+                    onClick={handleBatchDelete}
                   >
                     <Trash2 className="h-3 w-3 mr-1" /> 批量删除
                   </Button>
@@ -1900,6 +2176,38 @@ export default function ReadingPage() {
           <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>上一页</Button>
           <span className="flex items-center text-sm text-muted-foreground px-3">{page} / {totalPages}</span>
           <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>下一页</Button>
+        </div>
+      )}
+
+      {/* Delete confirmation dialog (single + batch) */}
+      {deleteDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card rounded-xl border shadow-2xl p-6 mx-4 max-w-sm w-full space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-base font-semibold">
+              {deleteDialog.ids.length === 1
+                ? "确定删除此精读分析？"
+                : `确定删除选中的 ${deleteDialog.ids.length} 篇文章？`}
+            </h3>
+            <p className="text-sm text-muted-foreground">删除后无法恢复。</p>
+            <label className="flex items-center gap-2 cursor-pointer text-sm p-2 rounded-lg bg-muted/50 border">
+              <input
+                type="checkbox"
+                checked={deleteWithCards}
+                onChange={(e) => setDeleteWithCards(e.target.checked)}
+                className="rounded border-input"
+              />
+              <span>同时删除关联卡片{deleteDialog.cardCount > 0 ? `（${deleteDialog.cardCount} 张）` : ""}</span>
+            </label>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteDialog(null)}>
+                取消
+              </Button>
+              <Button variant="destructive" size="sm" onClick={confirmDelete}>
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                {deleteWithCards ? "删除文章和卡片" : "仅删除文章"}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 
