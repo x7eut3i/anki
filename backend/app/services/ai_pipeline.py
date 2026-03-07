@@ -19,55 +19,72 @@ from app.services.json_repair import repair_json, robust_json_parse
 
 logger = logging.getLogger("anki.ai_pipeline")
 
-# ── RPM Rate Limiter (token bucket, module-level) ──
-_rpm_lock = asyncio.Lock()
-_rpm_tokens: float = 0.0       # available tokens
-_rpm_last_refill: float = 0.0  # last refill timestamp
-_rpm_limit: int = 0            # 0 = unlimited
+# ── RPM Rate Limiter (sliding window + concurrency semaphore, module-level) ──
+#
+# Two independent constraints enforced:
+#   1. Sliding window: at most N requests *started* in any 60-second window.
+#      Implemented via a list of monotonic timestamps.  A new request may only
+#      proceed when fewer than N timestamps fall within the last 60 s.
+#   2. Concurrency semaphore: at most N requests *in-flight* simultaneously.
+#      Acquired after the window check, released as soon as the request ends.
+#
+_rpm_semaphore: asyncio.Semaphore | None = None
+_rpm_window_lock = asyncio.Lock()
+_rpm_timestamps: list[float] = []   # monotonic times of recent request starts
+_rpm_limit: int = 0                 # 0 = unlimited
 
 
-async def _rpm_wait(config) -> None:
-    """Wait if necessary to comply with RPM rate limit.
+async def _rpm_acquire(config) -> bool:
+    """Wait until both RPM-window and concurrency constraints allow a request.
 
-    Uses a token-bucket approach: refills at rpm_limit tokens per 60s.
-    If no tokens available, sleeps until one becomes available,
-    then re-acquires the lock to atomically claim a token.
+    Returns True if rate limiting is active (caller MUST call ``_rpm_release``
+    when the request finishes).  Returns False when rate limiting is disabled.
     """
-    global _rpm_tokens, _rpm_last_refill, _rpm_limit
+    global _rpm_semaphore, _rpm_limit, _rpm_timestamps
 
     limit = getattr(config, "rpm_limit", 0) or 0
     if limit <= 0:
-        return  # No rate limit configured
+        return False  # No rate limit configured
 
+    # Recreate state when limit changes
+    if limit != _rpm_limit:
+        _rpm_limit = limit
+        _rpm_semaphore = asyncio.Semaphore(limit)
+        _rpm_timestamps = []
+
+    assert _rpm_semaphore is not None
+
+    # ── Step 1: sliding-window check (at most N starts per 60 s) ──
     while True:
         wait_time = 0.0
-        async with _rpm_lock:
+        async with _rpm_window_lock:
             now = time.monotonic()
+            # Purge timestamps older than 60 s
+            _rpm_timestamps[:] = [t for t in _rpm_timestamps if now - t < 60.0]
+            if len(_rpm_timestamps) < limit:
+                # Room in the window – claim a slot
+                _rpm_timestamps.append(now)
+                break
+            # Window full – calculate how long until the oldest entry expires
+            wait_time = 60.0 - (now - _rpm_timestamps[0]) + 0.1
 
-            # If limit changed, reset bucket
-            if limit != _rpm_limit:
-                _rpm_limit = limit
-                _rpm_tokens = 1.0  # Start with 1 token to prevent burst
-                _rpm_last_refill = now
-
-            # Refill tokens based on elapsed time
-            elapsed = now - _rpm_last_refill
-            if elapsed > 0:
-                refill = elapsed * (limit / 60.0)
-                _rpm_tokens = min(float(limit), _rpm_tokens + refill)
-                _rpm_last_refill = now
-
-            if _rpm_tokens >= 1.0:
-                _rpm_tokens -= 1.0
-                return  # Got a token, proceed
-
-            # Calculate wait time for one token to become available
-            wait_time = (1.0 - _rpm_tokens) / (limit / 60.0)
-
-        # Sleep outside the lock so other coroutines can also queue up
-        logger.info("RPM rate limit: waiting %.1fs (limit=%d/min)", wait_time, limit)
+        logger.info("RPM rate limit: window full, waiting %.1fs (limit=%d/min)",
+                    wait_time, limit)
         await asyncio.sleep(wait_time)
-        # Loop back to re-acquire lock and try to claim a token
+
+    # ── Step 2: concurrency check (at most N in-flight) ──
+    await _rpm_semaphore.acquire()
+    return True
+
+
+def _rpm_release() -> None:
+    """Release the concurrency semaphore after a request completes.
+
+    The sliding-window timestamp is NOT removed — it stays until it naturally
+    ages out (60 s), which is exactly what enforces the per-minute cap.
+    """
+    if _rpm_semaphore is not None:
+        _rpm_semaphore.release()
 
 # ── Fallback model cooldown state (module-level, shared across all requests) ──
 _fallback_active_until: datetime | None = None
@@ -161,64 +178,72 @@ async def _ai_call_with_retry(
     """
     last_error = None
 
-    # Apply RPM rate limiting
+    # Apply RPM rate limiting — blocks until both sliding window and
+    # concurrency semaphore allow a new request.
+    rpm_active = False
     if config:
-        await _rpm_wait(config)
+        rpm_active = await _rpm_acquire(config)
 
-    # Apply fallback model if active
-    if config and _should_use_fallback() and _fallback_model_name:
-        payload = {**payload, "model": _fallback_model_name}
-        logger.info("%s: using fallback model %s", feature, _fallback_model_name)
+    try:
+        # Apply fallback model if active
+        if config and _should_use_fallback() and _fallback_model_name:
+            payload = {**payload, "model": _fallback_model_name}
+            logger.info("%s: using fallback model %s", feature, _fallback_model_name)
 
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
 
-                # Check for rate limit or server errors that warrant fallback
-                if resp.status_code in (429, 500, 502, 503, 529) and config:
-                    error_reason = f"HTTP {resp.status_code}"
-                    try:
-                        err_body = resp.json()
-                        if "error" in err_body:
-                            err_obj = err_body["error"]
-                            error_reason = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
-                    except Exception:
-                        pass
+                    # Check for rate limit or server errors that warrant fallback
+                    if resp.status_code in (429, 500, 502, 503, 529) and config:
+                        error_reason = f"HTTP {resp.status_code}"
+                        try:
+                            err_body = resp.json()
+                            if "error" in err_body:
+                                err_obj = err_body["error"]
+                                error_reason = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
+                        except Exception:
+                            pass
 
-                    fallback_name = _activate_fallback(config, f"{error_reason} (HTTP {resp.status_code})")
-                    if fallback_name and payload.get("model") != fallback_name:
-                        # Retry immediately with fallback model
-                        payload = {**payload, "model": fallback_name}
-                        logger.warning(
-                            "%s: HTTP %d, switching to fallback model %s and retrying",
-                            feature, resp.status_code, fallback_name,
-                        )
-                        continue
+                        fallback_name = _activate_fallback(config, f"{error_reason} (HTTP {resp.status_code})")
+                        if fallback_name and payload.get("model") != fallback_name:
+                            # Retry immediately with fallback model
+                            payload = {**payload, "model": fallback_name}
+                            logger.warning(
+                                "%s: HTTP %d, switching to fallback model %s and retrying",
+                                feature, resp.status_code, fallback_name,
+                            )
+                            continue
 
-                resp.raise_for_status()
-            return resp.json()
-        except Exception as err:
-            last_error = err
+                    resp.raise_for_status()
+                return resp.json()
+            except Exception as err:
+                last_error = err
 
-            # Check if this is an HTTP error that warrants fallback activation
-            if config and isinstance(err, httpx.HTTPStatusError):
-                status_code = err.response.status_code
-                if status_code in (429, 500, 502, 503, 529):
-                    fallback_name = _activate_fallback(config, f"HTTP {status_code}")
-                    if fallback_name and payload.get("model") != fallback_name:
-                        payload = {**payload, "model": fallback_name}
-                        logger.warning(
-                            "%s: activated fallback model %s after HTTP %d",
-                            feature, fallback_name, status_code,
-                        )
+                # Check if this is an HTTP error that warrants fallback activation
+                if config and isinstance(err, httpx.HTTPStatusError):
+                    status_code = err.response.status_code
+                    if status_code in (429, 500, 502, 503, 529):
+                        fallback_name = _activate_fallback(config, f"HTTP {status_code}")
+                        if fallback_name and payload.get("model") != fallback_name:
+                            payload = {**payload, "model": fallback_name}
+                            logger.warning(
+                                "%s: activated fallback model %s after HTTP %d",
+                                feature, fallback_name, status_code,
+                            )
 
-            if attempt < max_retries - 1:
-                logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
-                await asyncio.sleep(2 * (attempt + 1))
-            else:
-                logger.error("%s failed after %d attempts: %s", feature, max_retries, err)
-    raise last_error  # type: ignore[misc]
+                if attempt < max_retries - 1:
+                    logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
+                    await asyncio.sleep(2 * (attempt + 1))
+                else:
+                    logger.error("%s failed after %d attempts: %s", feature, max_retries, err)
+        raise last_error  # type: ignore[misc]
+    finally:
+        # Release concurrency slot immediately so other requests can proceed.
+        # The sliding-window timestamp remains and ages out after 60 s.
+        if rpm_active:
+            _rpm_release()
 
 
 def _extract_ai_content(result: dict) -> str:
