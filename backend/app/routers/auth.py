@@ -14,6 +14,7 @@ from app.schemas.user import (
     UserResponse,
     UserUpdate,
     TokenResponse,
+    ChangePasswordRequest,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -72,3 +73,30 @@ def update_me(
     session.commit()
     session.refresh(current_user)
     return UserResponse.model_validate(current_user)
+
+
+@router.put("/change-password")
+def change_password(
+    data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Change current user's password (requires current password verification)."""
+    if not verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="当前密码不正确",
+        )
+
+    if len(data.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新密码至少6个字符",
+        )
+
+    current_user.hashed_password = hash_password(data.new_password)
+    session.add(current_user)
+    session.commit()
+
+    logger.info("User %s changed their password", current_user.username)
+    return {"ok": True, "message": "密码修改成功"}

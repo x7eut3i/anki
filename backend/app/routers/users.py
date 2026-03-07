@@ -155,3 +155,47 @@ def reset_user_password(
 
     logger.info("Admin %s reset password for user %s", current_user.username, user.username)
     return {"ok": True, "message": f"已重置用户 {user.username} 的密码"}
+
+
+@router.delete("/{user_id}")
+def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Delete a user and all associated data (admin only, cannot delete self)."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="不能删除自己")
+
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    username = user.username
+
+    # Delete associated data in dependent tables
+    from sqlmodel import text
+    dependent_tables = [
+        "user_card_progress",
+        "study_sessions",
+        "study_presets",
+        "review_log",
+        "article_analysis",
+        "ai_jobs",
+        "ai_configs",
+        "ai_prompt_configs",
+    ]
+    for table in dependent_tables:
+        try:
+            session.exec(text(f"DELETE FROM {table} WHERE user_id = :uid"), params={"uid": user_id})
+        except Exception:
+            pass  # Table may not exist in older schemas
+
+    session.delete(user)
+    session.commit()
+
+    logger.info("Admin %s deleted user %s (id=%d)", current_user.username, username, user_id)
+    return {"ok": True, "message": f"已删除用户 {username}"}

@@ -72,6 +72,13 @@ export const auth = {
 
   me: (token: string) =>
     request<any>("/api/auth/me", { token }),
+
+  changePassword: (currentPassword: string, newPassword: string, token: string) =>
+    request<any>("/api/auth/change-password", {
+      method: "PUT",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      token,
+    }),
 };
 
 // ---------------------------------------------------------------------------
@@ -554,6 +561,12 @@ export const users = {
     request<any>(`/api/users/${userId}/reset-password`, {
       method: "PUT",
       body: JSON.stringify({ new_password: newPassword }),
+      token,
+    }),
+
+  delete: (userId: number, token: string) =>
+    request<any>(`/api/users/${userId}`, {
+      method: "DELETE",
       token,
     }),
 };

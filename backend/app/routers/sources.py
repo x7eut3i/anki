@@ -98,9 +98,10 @@ def list_sources(
                 )
             ).all()
 
-        # Ensure system sources exist (in case DB was migrated from old schema)
+        # Ensure all default sources exist (in case DB was migrated or partially seeded)
         existing_names = {s.name for s in sources}
-        from app.services.source_crawlers import SYSTEM_SOURCES
+        from app.services.source_crawlers import SYSTEM_SOURCES, NORMAL_SOURCES
+        added = False
         for s in SYSTEM_SOURCES:
             if s["name"] not in existing_names:
                 source = ArticleSource(
@@ -111,7 +112,20 @@ def list_sources(
                     description=s.get("description", ""),
                 )
                 session.add(source)
-        session.commit()
+                added = True
+        for s in NORMAL_SOURCES:
+            if s["name"] not in existing_names:
+                source = ArticleSource(
+                    name=s["name"], url=s["url"],
+                    source_type=s.get("type", "html"),
+                    category=s.get("category", "时政热点"),
+                    is_system=False,
+                    description=s.get("description", ""),
+                )
+                session.add(source)
+                added = True
+        if added:
+            session.commit()
         sources = session.exec(
             select(ArticleSource).order_by(
                 ArticleSource.is_system.desc(),

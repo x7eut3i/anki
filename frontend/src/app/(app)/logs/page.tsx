@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuthStore } from "@/lib/store";
 import { logs } from "@/lib/api";
+import { formatDateTime } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ export default function LogsPage() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedAppIds, setExpandedAppIds] = useState<Set<number>>(new Set());
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [retentionDays, setRetentionDays] = useState(0);
   const [retentionInput, setRetentionInput] = useState("");
@@ -143,6 +145,17 @@ export default function LogsPage() {
 
   const toggleExpand = (idx: number) => {
     setExpandedIds((prev) => {
+      if (prev.has(idx)) {
+        // Clicking same header: collapse it
+        return new Set();
+      }
+      // Clicking a different entry: expand it (collapses previous)
+      return new Set([idx]);
+    });
+  };
+
+  const toggleAppExpand = (idx: number) => {
+    setExpandedAppIds((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) next.delete(idx);
       else next.add(idx);
@@ -229,7 +242,7 @@ export default function LogsPage() {
           return (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); setPage(1); setExpandedIds(new Set()); setDateFilter(""); }}
+              onClick={() => { setActiveTab(tab.id); setPage(1); setExpandedIds(new Set()); setExpandedAppIds(new Set()); setDateFilter(""); }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 activeTab === tab.id
                   ? "bg-background text-foreground shadow-sm"
@@ -292,18 +305,28 @@ export default function LogsPage() {
               </div>
             ) : (
               entries.map((entry, idx) => {
-                const isExpanded = expandedIds.has(idx);
+                const isExpanded = activeTab === "ai" ? expandedIds.has(idx) : expandedAppIds.has(idx);
                 const hasMultiLine = entry.message && entry.message.includes("\n");
                 const hasExtra = entry.data || hasMultiLine;
+                const isLongMessage = entry.message && entry.message.length > 120;
+                const isExpandable = hasExtra || (activeTab === "app" && (isLongMessage || hasMultiLine));
                 return (
                 <div
                   key={idx}
-                  className="px-4 py-2 hover:bg-muted/50 cursor-pointer text-sm"
-                  onClick={() => hasExtra && toggleExpand(idx)}
+                  className="px-4 py-2 hover:bg-muted/50 text-sm"
                 >
-                  <div className="flex items-center gap-2">
+                  <div
+                    className={`flex items-center gap-2 ${isExpandable ? "cursor-pointer" : ""}`}
+                    onClick={() => {
+                      if (activeTab === "ai" && hasExtra) {
+                        toggleExpand(idx);
+                      } else if (activeTab === "app" && isExpandable) {
+                        toggleAppExpand(idx);
+                      }
+                    }}
+                  >
                     <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-                      {entry.timestamp}
+                      {formatDateTime(entry.timestamp)}
                     </span>
                     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${LEVEL_COLORS[entry.level] || "text-gray-500"}`}>
                       {LEVEL_ICONS[entry.level]}
@@ -312,15 +335,15 @@ export default function LogsPage() {
                     <span className={`flex-1 font-mono text-xs ${isExpanded ? "whitespace-pre-wrap break-all" : "truncate"}`}>
                       {hasMultiLine && !isExpanded ? entry.message.split("\n")[0] + " ..." : entry.message}
                     </span>
-                    {hasExtra && (
+                    {isExpandable && (
                       <span className="text-xs text-muted-foreground shrink-0">
                         {isExpanded ? "▼" : "▶"}
                       </span>
                     )}
                   </div>
                   {isExpanded && (
-                    <div className="mt-2 space-y-2">
-                      {hasMultiLine && !entry.data && (
+                    <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                      {(hasMultiLine || (activeTab === "app" && isLongMessage)) && !entry.data && (
                         <pre className="p-3 bg-muted rounded-md text-xs overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
                           {entry.message}
                         </pre>

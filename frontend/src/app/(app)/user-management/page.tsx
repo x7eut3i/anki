@@ -20,6 +20,7 @@ import {
   Users,
   X,
   Check,
+  Trash2,
 } from "lucide-react";
 
 interface UserItem {
@@ -95,6 +96,17 @@ export default function UserManagementPage() {
       alert("密码已重置");
     } catch (err: any) {
       alert(err.message || "重置失败");
+    }
+  };
+
+  const handleDelete = async (userId: number, username: string) => {
+    if (!token) return;
+    if (!confirm(`确定要删除用户 ${username} 吗？该操作不可恢复，将删除该用户的所有数据。`)) return;
+    try {
+      await usersApi.delete(userId, token);
+      loadUsers();
+    } catch (err: any) {
+      alert(err.message || "删除失败");
     }
   };
 
@@ -226,30 +238,39 @@ export default function UserManagementPage() {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {u.id !== currentUser?.id && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          title={u.is_active ? "禁用用户" : "启用用户"}
-                          onClick={() => handleToggle(u.id, u.is_active)}
-                        >
-                          {u.is_active ? (
-                            <ToggleRight className="h-4 w-4 text-green-600" />
-                          ) : (
-                            <ToggleLeft className="h-4 w-4 text-muted-foreground" />
-                          )}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          title="重置密码"
-                          onClick={() => { setResetPwdId(resetPwdId === u.id ? null : u.id); setNewPassword(""); }}
-                        >
-                          <KeyRound className="h-4 w-4" />
-                        </Button>
-                      </>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title={u.is_active ? "禁用用户" : "启用用户"}
+                        onClick={() => handleToggle(u.id, u.is_active)}
+                      >
+                        {u.is_active ? (
+                          <ToggleRight className="h-4 w-4 text-green-600" />
+                        ) : (
+                          <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title="重置密码"
+                      onClick={() => { setResetPwdId(resetPwdId === u.id ? null : u.id); setNewPassword(""); }}
+                    >
+                      <KeyRound className="h-4 w-4" />
+                    </Button>
+                    {u.id !== currentUser?.id && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                        title="删除用户"
+                        onClick={() => handleDelete(u.id, u.username)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     )}
                   </div>
                 </div>

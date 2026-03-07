@@ -47,7 +47,7 @@ async def _rpm_wait(config) -> None:
             # If limit changed, reset bucket
             if limit != _rpm_limit:
                 _rpm_limit = limit
-                _rpm_tokens = float(limit)
+                _rpm_tokens = 1.0  # Start with 1 token to prevent burst
                 _rpm_last_refill = now
 
             # Refill tokens based on elapsed time

@@ -6,7 +6,7 @@ import { auth } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Settings, User, Shield, LogOut, Globe } from "lucide-react";
+import { Settings, User, Shield, LogOut, Globe, KeyRound } from "lucide-react";
 
 const TIMEZONE_OPTIONS = [
   { value: "Asia/Shanghai", label: "中国标准时间 (UTC+8)" },
@@ -38,6 +38,12 @@ export default function SettingsPage() {
   const [userTimezone, setUserTimezone] = useState("Asia/Shanghai");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -47,6 +53,7 @@ export default function SettingsPage() {
       setDesiredRetention(data.desired_retention || 0.9);
       setSessionLimit(data.session_card_limit || 50);
       setUserTimezone(data.timezone || "Asia/Shanghai");
+      setEmail(data.email || "");
     });
   }, [token]);
 
@@ -63,6 +70,7 @@ export default function SettingsPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
+          email: email || undefined,
           daily_new_card_limit: dailyGoal,
           desired_retention: desiredRetention,
           session_card_limit: sessionLimit,
@@ -112,8 +120,88 @@ export default function SettingsPage() {
           </div>
           <div>
             <label className="text-sm font-medium">邮箱</label>
-            <Input value={profile?.email || ""} disabled />
+            <Input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@example.com"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              修改后点击下方"保存设置"生效
+            </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Change Password */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <KeyRound className="h-5 w-5" />
+            修改密码
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <label className="text-sm font-medium">当前密码</label>
+            <Input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="输入当前密码"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">新密码</label>
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="至少6个字符"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium">确认新密码</label>
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="再次输入新密码"
+            />
+          </div>
+          <Button
+            onClick={async () => {
+              if (!token) return;
+              if (newPassword.length < 6) {
+                setPwMsg("新密码至少6个字符");
+                return;
+              }
+              if (newPassword !== confirmPassword) {
+                setPwMsg("两次输入的密码不一致");
+                return;
+              }
+              setPwSaving(true);
+              setPwMsg(null);
+              try {
+                await auth.changePassword(currentPassword, newPassword, token);
+                setPwMsg("密码修改成功");
+                setCurrentPassword("");
+                setNewPassword("");
+                setConfirmPassword("");
+              } catch (err: any) {
+                setPwMsg(err.message || "密码修改失败");
+              } finally {
+                setPwSaving(false);
+              }
+            }}
+            disabled={pwSaving || !currentPassword || !newPassword || !confirmPassword}
+          >
+            {pwSaving ? "修改中..." : "修改密码"}
+          </Button>
+          {pwMsg && (
+            <p className={`text-sm ${pwMsg === "密码修改成功" ? "text-green-600" : "text-red-500"}`}>
+              {pwMsg}
+            </p>
+          )}
         </CardContent>
       </Card>
 
