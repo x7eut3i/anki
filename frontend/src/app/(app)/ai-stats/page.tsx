@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useAuthStore } from "@/lib/store";
+import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,7 +13,8 @@ import {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 async function fetchStats(endpoint: string, token: string, days: number) {
-  const res = await fetch(`${API_BASE}/api/stats/${endpoint}?days=${days}`, {
+  const tz = getUserTimezone();
+  const res = await fetch(`${API_BASE}/api/stats/${endpoint}?days=${days}&tz=${encodeURIComponent(tz)}`, {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });
   if (!res.ok) throw new Error(`Failed to fetch ${endpoint} stats`);

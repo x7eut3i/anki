@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select, func, col, text
@@ -21,42 +22,99 @@ logger = logging.getLogger("anki.stats")
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
 
-def _date_range(days: int | None, start: str | None, end: str | None):
-    """Compute start/end datetimes from params."""
-    now = datetime.now(timezone.utc)
+def _date_range(days: int | None, start: str | None, end: str | None, tz: ZoneInfo | None = None):
+    """Compute start/end datetimes from params.
+
+    When tz is provided, boundaries are computed in the user's local timezone
+    and then converted to UTC for database queries.
+    """
+    if tz:
+        now_local = datetime.now(tz)
+    else:
+        now_local = datetime.now(timezone.utc)
+
     if start:
         try:
-            dt_start = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            dt_start = datetime.strptime(start, "%Y-%m-%d")
+            if tz:
+                dt_start = dt_start.replace(tzinfo=tz)
+            else:
+                dt_start = dt_start.replace(tzinfo=timezone.utc)
         except ValueError:
-            dt_start = now - timedelta(days=30)
+            dt_start = now_local - timedelta(days=30)
     elif days:
-        dt_start = now - timedelta(days=days)
+        dt_start = now_local - timedelta(days=days)
     else:
-        dt_start = now - timedelta(days=30)
+        dt_start = now_local - timedelta(days=30)
 
     if end:
         try:
             dt_end = datetime.strptime(end, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc
+                hour=23, minute=59, second=59
             )
+            if tz:
+                dt_end = dt_end.replace(tzinfo=tz)
+            else:
+                dt_end = dt_end.replace(tzinfo=timezone.utc)
         except ValueError:
-            dt_end = now
+            dt_end = now_local
     else:
-        dt_end = now
+        dt_end = now_local
 
-    return dt_start, dt_end
+    # Convert to UTC for database queries
+    dt_start_utc = dt_start.astimezone(timezone.utc)
+    dt_end_utc = dt_end.astimezone(timezone.utc)
+
+    return dt_start_utc, dt_end_utc
 
 
-def _fill_date_series(data_dict: dict, start: datetime, end: datetime) -> list[dict]:
-    """Fill missing dates with zeros."""
+def _to_local_date(utc_dt: datetime, tz: ZoneInfo | None) -> str:
+    """Convert a UTC datetime to a local date string."""
+    if tz:
+        return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz).strftime("%Y-%m-%d")
+    return utc_dt.strftime("%Y-%m-%d")
+
+
+def _to_local_datetime(utc_dt: datetime, tz: ZoneInfo | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """Convert a UTC datetime to a local datetime string."""
+    if tz:
+        return utc_dt.replace(tzinfo=timezone.utc).astimezone(tz).strftime(fmt)
+    return utc_dt.strftime(fmt)
+
+
+def _fill_date_series(data_dict: dict, start: datetime, end: datetime, tz: ZoneInfo | None = None) -> list[dict]:
+    """Fill missing dates with zeros.
+
+    When tz is provided, iterates over local dates instead of UTC dates.
+    """
     result = []
-    current = start.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = end.replace(hour=0, minute=0, second=0, microsecond=0)
-    while current <= end_day:
-        key = current.strftime("%Y-%m-%d")
-        result.append({"date": key, **data_dict.get(key, {"count": 0})})
-        current += timedelta(days=1)
+    if tz:
+        local_start = start.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        local_end = end.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        current = local_start
+        while current <= local_end:
+            key = current.strftime("%Y-%m-%d")
+            result.append({"date": key, **data_dict.get(key, {"count": 0})})
+            current += timedelta(days=1)
+    else:
+        current = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_day = end.replace(hour=0, minute=0, second=0, microsecond=0)
+        while current <= end_day:
+            key = current.strftime("%Y-%m-%d")
+            result.append({"date": key, **data_dict.get(key, {"count": 0})})
+            current += timedelta(days=1)
     return result
+
+
+def _parse_tz(tz_str: str | None) -> ZoneInfo | None:
+    """Parse a timezone string, returning None if invalid or not provided."""
+    if not tz_str:
+        return None
+    try:
+        return ZoneInfo(tz_str)
+    except Exception:
+        logger.warning("Invalid timezone: %s, falling back to UTC", tz_str)
+        return None
 
 
 # ── AI Statistics ────────────────────────────────────────────────────
@@ -66,11 +124,13 @@ def get_ai_stats(
     days: int = Query(30, ge=1, le=365),
     start: str | None = None,
     end: str | None = None,
+    tz: str | None = Query(None, description="IANA timezone, e.g. Asia/Shanghai"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     """Comprehensive AI interaction statistics from DB."""
-    dt_start, dt_end = _date_range(days, start, end)
+    user_tz = _parse_tz(tz)
+    dt_start, dt_end = _date_range(days, start, end, user_tz)
 
     # All logs in range
     logs = session.exec(
@@ -88,17 +148,17 @@ def get_ai_stats(
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
     max_latency = max(latencies) if latencies else 0
 
-    # Daily trend
+    # Daily trend (bucket by user's local date)
     daily_data: dict[str, dict] = {}
     for log in logs:
-        day = log.created_at.strftime("%Y-%m-%d")
+        day = _to_local_date(log.created_at, user_tz)
         if day not in daily_data:
             daily_data[day] = {"count": 0, "tokens": 0, "errors": 0}
         daily_data[day]["count"] += 1
         daily_data[day]["tokens"] += log.tokens_used
         if log.status == "error":
             daily_data[day]["errors"] += 1
-    daily = _fill_date_series(daily_data, dt_start, dt_end)
+    daily = _fill_date_series(daily_data, dt_start, dt_end, user_tz)
 
     # By feature
     feature_map: dict[str, dict] = {}
@@ -144,7 +204,7 @@ def get_ai_stats(
         "daily": daily,
         "by_feature": by_feature,
         "by_model": by_model,
-        "range": {"start": dt_start.strftime("%Y-%m-%d"), "end": dt_end.strftime("%Y-%m-%d")},
+        "range": {"start": _to_local_date(dt_start, user_tz), "end": _to_local_date(dt_end, user_tz)},
     }
 
 
@@ -155,11 +215,13 @@ def get_content_stats(
     days: int = Query(30, ge=1, le=365),
     start: str | None = None,
     end: str | None = None,
+    tz: str | None = Query(None, description="IANA timezone, e.g. Asia/Shanghai"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     """Articles crawled and cards generated statistics."""
-    dt_start, dt_end = _date_range(days, start, end)
+    user_tz = _parse_tz(tz)
+    dt_start, dt_end = _date_range(days, start, end, user_tz)
 
     # Articles by source per day
     articles = session.exec(
@@ -169,11 +231,11 @@ def get_content_stats(
         )
     ).all()
 
-    # Daily articles
+    # Daily articles (bucket by user's local date)
     daily_articles: dict[str, dict] = {}
     source_totals: dict[str, dict] = {}
     for a in articles:
-        day = a.created_at.strftime("%Y-%m-%d")
+        day = _to_local_date(a.created_at, user_tz)
         if day not in daily_articles:
             daily_articles[day] = {"count": 0, "avg_quality": 0, "total_quality": 0}
         daily_articles[day]["count"] += 1
@@ -203,7 +265,7 @@ def get_content_stats(
 
     daily_cards: dict[str, int] = {}
     for c in ai_cards:
-        day = c.created_at.strftime("%Y-%m-%d")
+        day = _to_local_date(c.created_at, user_tz)
         daily_cards[day] = daily_cards.get(day, 0) + 1
 
     # Merge daily data
@@ -232,7 +294,7 @@ def get_content_stats(
         ).order_by(IngestionLog.started_at.desc()).limit(20)
     ).all()
     recent_runs = [{
-        "date": r.started_at.strftime("%Y-%m-%d %H:%M"),
+        "date": _to_local_datetime(r.started_at, user_tz),
         "status": r.status,
         "articles_fetched": r.articles_fetched,
         "articles_analyzed": r.articles_analyzed,
@@ -246,7 +308,7 @@ def get_content_stats(
         "daily": daily_merged,
         "by_source": by_source,
         "recent_runs": recent_runs,
-        "range": {"start": dt_start.strftime("%Y-%m-%d"), "end": dt_end.strftime("%Y-%m-%d")},
+        "range": {"start": _to_local_date(dt_start, user_tz), "end": _to_local_date(dt_end, user_tz)},
     }
 
 
@@ -258,11 +320,13 @@ def get_study_stats(
     start: str | None = None,
     end: str | None = None,
     period: str = Query("day", pattern="^(day|week|month)$"),
+    tz: str | None = Query(None, description="IANA timezone, e.g. Asia/Shanghai"),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     """Comprehensive study statistics with aggregation."""
-    dt_start, dt_end = _date_range(days, start, end)
+    user_tz = _parse_tz(tz)
+    dt_start, dt_end = _date_range(days, start, end, user_tz)
 
     # All reviews in range
     reviews = session.exec(
@@ -281,10 +345,10 @@ def get_study_stats(
     easy_count = sum(1 for r in reviews if r.rating == 4)
     retention_rate = (total_reviews - again_count) / total_reviews if total_reviews else 0
 
-    # Daily data
+    # Daily data (bucket by user's local date)
     daily_data: dict[str, dict] = {}
     for r in reviews:
-        day = r.reviewed_at.strftime("%Y-%m-%d")
+        day = _to_local_date(r.reviewed_at, user_tz)
         if day not in daily_data:
             daily_data[day] = {
                 "count": 0, "again": 0, "hard": 0, "good": 0, "easy": 0,
@@ -304,7 +368,7 @@ def get_study_stats(
             daily_data[day]["new_cards"] += 1
 
     # Fill missing dates
-    daily = _fill_date_series(daily_data, dt_start, dt_end)
+    daily = _fill_date_series(daily_data, dt_start, dt_end, user_tz)
     # Add default fields for filled days
     for d in daily:
         d.setdefault("again", 0)
@@ -451,5 +515,5 @@ def get_study_stats(
         "daily": daily,
         "aggregated": aggregated,
         "by_category": by_category,
-        "range": {"start": dt_start.strftime("%Y-%m-%d"), "end": dt_end.strftime("%Y-%m-%d")},
+        "range": {"start": _to_local_date(dt_start, user_tz), "end": _to_local_date(dt_end, user_tz)},
     }

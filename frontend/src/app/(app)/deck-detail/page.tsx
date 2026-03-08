@@ -22,6 +22,11 @@ import {
   CheckSquare,
   Square,
   Search,
+  Pencil,
+  RefreshCw,
+  Save,
+  X,
+  Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -51,6 +56,17 @@ export default function DeckDetailPage() {
   const [selectedCards, setSelectedCards] = useState<Set<number>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Card editing
+  const [editingCard, setEditingCard] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  // Regenerate questions
+  const [regenCardId, setRegenCardId] = useState<number | null>(null);
+  const [regenLoading, setRegenLoading] = useState(false);
+  const [regenQuestions, setRegenQuestions] = useState<any[] | null>(null);
+  const [regenError, setRegenError] = useState<string>("");
 
   // Sorting
   type SortKey = "default" | "front" | "created_at" | "state" | "reps";
@@ -210,6 +226,90 @@ export default function DeckDetailPage() {
       alert("批量删除失败，请重试");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // ── Card editing ──
+  const startEditing = (card: any) => {
+    const meta = parseJson<Record<string, any> | null>(card.meta_info, null);
+    const distractors = parseJson<string[]>(card.distractors, []);
+    setEditingCard(card);
+    setEditForm({
+      front: card.front || "",
+      back: card.back || "",
+      explanation: card.explanation || "",
+      distractors: distractors.join("\n"),
+      tags: card.tags || "",
+      source: card.source || "",
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!token || !editingCard) return;
+    setSaving(true);
+    try {
+      // Convert distractors from newline-separated to JSON array
+      const distractorsArr = editForm.distractors
+        .split("\n")
+        .map((d) => d.trim())
+        .filter(Boolean);
+      const updateData: Record<string, any> = {
+        front: editForm.front,
+        back: editForm.back,
+        explanation: editForm.explanation,
+        distractors: JSON.stringify(distractorsArr),
+      };
+      if (editForm.tags !== (editingCard.tags || "")) {
+        updateData.tags = editForm.tags;
+      }
+      const updated = await cardApi.update(editingCard.id, updateData, token);
+      setCards((prev) => prev.map((c) => c.id === editingCard.id ? { ...c, ...updated } : c));
+      setEditingCard(null);
+    } catch (err) {
+      console.error("Save failed:", err);
+      alert("保存失败，请重试");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── Regenerate questions ──
+  const handleRegenerateQuestions = async (cardId: number) => {
+    if (!token) return;
+    setRegenCardId(cardId);
+    setRegenLoading(true);
+    setRegenQuestions(null);
+    setRegenError("");
+    try {
+      const result = await cardApi.regenerateQuestions(cardId, token);
+      setRegenQuestions(result.questions);
+    } catch (err: any) {
+      console.error("Regenerate failed:", err);
+      setRegenError(err?.message || "生成失败，请重试");
+    } finally {
+      setRegenLoading(false);
+    }
+  };
+
+  const handleSaveRegenQuestions = async () => {
+    if (!token || !regenCardId || !regenQuestions) return;
+    setSaving(true);
+    try {
+      const card = cards.find((c) => c.id === regenCardId);
+      if (!card) return;
+      const meta = parseJson<Record<string, any>>(card.meta_info, {});
+      meta.alternate_questions = regenQuestions;
+      const updated = await cardApi.update(regenCardId, {
+        meta_info: JSON.stringify(meta),
+      }, token);
+      setCards((prev) => prev.map((c) => c.id === regenCardId ? { ...c, ...updated } : c));
+      setRegenCardId(null);
+      setRegenQuestions(null);
+    } catch (err) {
+      console.error("Save regen questions failed:", err);
+      alert("保存失败，请重试");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -470,6 +570,30 @@ export default function DeckDetailPage() {
                             <Button
                               variant="ghost"
                               size="icon"
+                              className="h-8 w-8"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startEditing(card);
+                              }}
+                              title="编辑卡片"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRegenerateQuestions(card.id);
+                              }}
+                              title="重新生成变体题"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               className="h-8 w-8 text-destructive"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -488,6 +612,76 @@ export default function DeckDetailPage() {
                     {isExpanded && !batchMode && (
                       <div className="px-4 pb-4">
                         <CardDetailPanel card={card} searchQuery={searchQuery.trim()} />
+
+                        {/* Regenerate questions inline review */}
+                        {regenCardId === card.id && (
+                          <div className="mt-3 pt-3 border-t space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                                🔄 重新生成变体题
+                              </span>
+                              <button
+                                onClick={() => { setRegenCardId(null); setRegenQuestions(null); setRegenError(""); }}
+                                className="text-muted-foreground hover:text-foreground text-sm"
+                              >✕</button>
+                            </div>
+
+                            {regenLoading && (
+                              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                AI 正在生成变体题…
+                              </div>
+                            )}
+
+                            {regenError && (
+                              <div className="text-sm text-destructive bg-red-50 dark:bg-red-950/20 rounded p-2">
+                                {regenError}
+                              </div>
+                            )}
+
+                            {regenQuestions && regenQuestions.length > 0 && (
+                              <div className="space-y-2">
+                                {regenQuestions.map((q: any, i: number) => (
+                                  <div key={i} className="bg-indigo-50 dark:bg-indigo-950/20 rounded-lg p-3 text-sm">
+                                    <p className="font-medium mb-1">{q.question}</p>
+                                    <p className="text-xs text-muted-foreground">答案：{q.answer}</p>
+                                    {q.distractors?.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {q.distractors.map((d: string, j: number) => (
+                                          <Badge key={j} variant="outline" className="text-xs">{d}</Badge>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <button
+                                      className="text-xs text-destructive mt-1 hover:underline"
+                                      onClick={() => setRegenQuestions((prev) => prev!.filter((_, idx) => idx !== i))}
+                                    >移除此题</button>
+                                  </div>
+                                ))}
+                                <div className="flex gap-2 justify-end">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleRegenerateQuestions(card.id)}
+                                    disabled={regenLoading}
+                                  >
+                                    <RefreshCw className="mr-1 h-3 w-3" />
+                                    重新生成
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={handleSaveRegenQuestions}
+                                    disabled={saving}
+                                  >
+                                    <Save className="mr-1 h-3 w-3" />
+                                    {saving ? "保存中…" : "确认保存"}
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <CardTagManager cardId={card.id} token={token!} onTagsChange={(tags) => {
                           setCards((prev) => prev.map((c) => c.id === card.id ? { ...c, tags_list: tags } : c));
                         }} />
@@ -500,6 +694,75 @@ export default function DeckDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Edit Card Modal ── */}
+      {editingCard && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingCard(null)}>
+          <div
+            className="bg-background rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="font-semibold text-lg">✏️ 编辑卡片</h3>
+              <button onClick={() => setEditingCard(null)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1 block">题面 (front)</label>
+                <textarea
+                  className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={editForm.front}
+                  onChange={(e) => setEditForm({ ...editForm, front: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">答案 (back)</label>
+                <textarea
+                  className="w-full min-h-[60px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={editForm.back}
+                  onChange={(e) => setEditForm({ ...editForm, back: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">解析 (explanation)</label>
+                <textarea
+                  className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={editForm.explanation}
+                  onChange={(e) => setEditForm({ ...editForm, explanation: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">干扰项（每行一个）</label>
+                <textarea
+                  className="w-full min-h-[60px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
+                  value={editForm.distractors}
+                  onChange={(e) => setEditForm({ ...editForm, distractors: e.target.value })}
+                  placeholder="错误选项1&#10;错误选项2&#10;错误选项3"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">标签（逗号分隔）</label>
+                <input
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={editForm.tags}
+                  onChange={(e) => setEditForm({ ...editForm, tags: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t">
+              <Button variant="outline" onClick={() => setEditingCard(null)}>
+                取消
+              </Button>
+              <Button onClick={handleSaveEdit} disabled={saving}>
+                <Save className="mr-1 h-4 w-4" />
+                {saving ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

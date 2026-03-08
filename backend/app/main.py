@@ -63,6 +63,10 @@ _file_handler.setFormatter(logging.Formatter(
 ))
 logging.getLogger().addHandler(_file_handler)
 
+# Suppress noisy third-party HTTP request logs
+for _noisy_logger in ("uvicorn.access", "httpx", "httpcore"):
+    logging.getLogger(_noisy_logger).setLevel(logging.WARNING)
+
 settings = get_settings()
 
 # ── Auto-generate JWT secret key if not set ────────────────────────────

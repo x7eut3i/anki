@@ -2,6 +2,8 @@
  * API client for communicating with the FastAPI backend.
  */
 
+import { getUserTimezone } from "./timezone";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface RequestOptions extends RequestInit {
@@ -157,6 +159,11 @@ export const cards = {
   batchApprove: (data: { card_ids?: number[]; deck_id?: number; all?: boolean }, token: string) =>
     request<{ approved: number; message: string }>("/api/cards/batch-approve", {
       method: "POST", body: JSON.stringify(data), token,
+    }),
+
+  regenerateQuestions: (id: number, token: string) =>
+    request<{ questions: any[] }>(`/api/cards/${id}/regenerate-questions`, {
+      method: "POST", token,
     }),
 };
 
@@ -621,15 +628,16 @@ export const logs = {
 
 export const stats = {
   ai: (days: number, token: string) =>
-    request<any>(`/api/stats/ai?days=${days}`, { token }),
+    request<any>(`/api/stats/ai?days=${days}&tz=${encodeURIComponent(getUserTimezone())}`, { token }),
 
   content: (days: number, token: string) =>
-    request<any>(`/api/stats/content?days=${days}`, { token }),
+    request<any>(`/api/stats/content?days=${days}&tz=${encodeURIComponent(getUserTimezone())}`, { token }),
 
   study: (params: { days?: number; period?: string }, token: string) => {
     const q = new URLSearchParams();
     if (params.days) q.set("days", String(params.days));
     if (params.period) q.set("period", params.period);
+    q.set("tz", getUserTimezone());
     return request<any>(`/api/stats/study?${q.toString()}`, { token });
   },
 };

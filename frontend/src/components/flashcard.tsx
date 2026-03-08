@@ -246,9 +246,9 @@ export default function Flashcard({
             </div>
             <div className="text-lg font-medium text-green-900 dark:text-green-100">{effectiveBack}</div>
             {/* Pinyin from meta_info (for idiom cards) */}
-            {metaInfo?.pinyin && (
-              <div className="mt-1 text-sm text-green-700/70 dark:text-green-300/70 italic">
-                拼音：{metaInfo.pinyin}
+            {(metaInfo?.pinyin || metaInfo?.meta_info?.pinyin) && (
+              <div className="mt-1.5 text-sm tracking-wider">
+                🔤 拼音：{metaInfo?.pinyin || metaInfo?.meta_info?.pinyin}
               </div>
             )}
             {metaInfo?.example_sentence && (

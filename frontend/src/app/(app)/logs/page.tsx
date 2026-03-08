@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuthStore } from "@/lib/store";
 import { logs } from "@/lib/api";
 import { formatDateTime } from "@/lib/timezone";
@@ -37,6 +37,69 @@ const LEVEL_ICONS: Record<string, React.ReactNode> = {
   INFO: <Info className="h-3.5 w-3.5" />,
   DEBUG: <Bug className="h-3.5 w-3.5" />,
 };
+
+/** Individual log entry with ref-based overflow detection */
+function LogEntry({ entry, idx, isExpanded, hasMultiLine, hasExtra, activeTab, onToggle }: {
+  entry: any; idx: number; isExpanded: boolean; hasMultiLine: boolean;
+  hasExtra: boolean; activeTab: "ai" | "app"; onToggle: () => void;
+}) {
+  const messageRef = useRef<HTMLSpanElement>(null);
+  const [isTruncated, setIsTruncated] = useState(false);
+
+  useEffect(() => {
+    const el = messageRef.current;
+    if (!el || isExpanded) return;
+    const check = () => setIsTruncated(el.scrollWidth > el.clientWidth);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [entry.message, isExpanded]);
+
+  const isExpandable = hasExtra || (activeTab === "app" && (isTruncated || hasMultiLine));
+
+  return (
+    <div className="px-4 py-2 hover:bg-muted/50 text-sm">
+      <div
+        className={`flex items-center gap-2 ${isExpandable ? "cursor-pointer" : ""}`}
+        onClick={() => isExpandable && onToggle()}
+      >
+        <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
+          {formatDateTime(entry.timestamp)}
+        </span>
+        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${LEVEL_COLORS[entry.level] || "text-gray-500"}`}>
+          {LEVEL_ICONS[entry.level]}
+          {entry.level}
+        </span>
+        <span
+          ref={messageRef}
+          className={`flex-1 font-mono text-xs ${isExpanded ? "whitespace-pre-wrap break-all" : "truncate"}`}
+        >
+          {hasMultiLine && !isExpanded ? entry.message.split("\n")[0] + " ..." : entry.message}
+        </span>
+        {isExpandable && (
+          <span className="text-xs text-muted-foreground shrink-0">
+            {isExpanded ? "▼" : "▶"}
+          </span>
+        )}
+      </div>
+      {isExpanded && (
+        <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+          {(hasMultiLine || (activeTab === "app" && isTruncated)) && !entry.data && (
+            <pre className="p-3 bg-muted rounded-md text-xs overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
+              {entry.message}
+            </pre>
+          )}
+          {entry.data && (
+            <pre className="p-3 bg-muted rounded-md text-xs overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
+              {JSON.stringify(entry.data, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function LogsPage() {
   const { token } = useAuthStore();
@@ -172,34 +235,34 @@ export default function LogsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <FileText className="h-6 w-6" /> 日志查看器
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2 shrink-0">
+          <FileText className="h-5 w-5 sm:h-6 sm:w-6" /> 日志查看器
         </h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
             onClick={() => setShowRetention(!showRetention)}
           >
-            <Settings className="h-4 w-4 mr-1" />
-            日志保留
+            <Settings className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">日志保留</span>
           </Button>
           <Button
             variant="destructive"
             size="sm"
             onClick={handleClear}
           >
-            <Trash2 className="h-4 w-4 mr-1" />
-            清空日志
+            <Trash2 className="h-4 w-4 sm:mr-1" />
+            <span className="hidden sm:inline">清空日志</span>
           </Button>
           <Button
             variant={autoRefresh ? "default" : "outline"}
             size="sm"
             onClick={() => setAutoRefresh(!autoRefresh)}
           >
-            <RefreshCw className={`h-4 w-4 mr-1 ${autoRefresh ? "animate-spin" : ""}`} />
-            {autoRefresh ? "停止" : "自动刷新"}
+            <RefreshCw className={`h-4 w-4 sm:mr-1 ${autoRefresh ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">{autoRefresh ? "停止" : "自动刷新"}</span>
           </Button>
           <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -308,54 +371,23 @@ export default function LogsPage() {
                 const isExpanded = activeTab === "ai" ? expandedIds.has(idx) : expandedAppIds.has(idx);
                 const hasMultiLine = entry.message && entry.message.includes("\n");
                 const hasExtra = entry.data || hasMultiLine;
-                const isLongMessage = entry.message && entry.message.length > 120;
-                const isExpandable = hasExtra || (activeTab === "app" && (isLongMessage || hasMultiLine));
                 return (
-                <div
+                <LogEntry
                   key={idx}
-                  className="px-4 py-2 hover:bg-muted/50 text-sm"
-                >
-                  <div
-                    className={`flex items-center gap-2 ${isExpandable ? "cursor-pointer" : ""}`}
-                    onClick={() => {
-                      if (activeTab === "ai" && hasExtra) {
-                        toggleExpand(idx);
-                      } else if (activeTab === "app" && isExpandable) {
-                        toggleAppExpand(idx);
-                      }
-                    }}
-                  >
-                    <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-                      {formatDateTime(entry.timestamp)}
-                    </span>
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium shrink-0 ${LEVEL_COLORS[entry.level] || "text-gray-500"}`}>
-                      {LEVEL_ICONS[entry.level]}
-                      {entry.level}
-                    </span>
-                    <span className={`flex-1 font-mono text-xs ${isExpanded ? "whitespace-pre-wrap break-all" : "truncate"}`}>
-                      {hasMultiLine && !isExpanded ? entry.message.split("\n")[0] + " ..." : entry.message}
-                    </span>
-                    {isExpandable && (
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        {isExpanded ? "▼" : "▶"}
-                      </span>
-                    )}
-                  </div>
-                  {isExpanded && (
-                    <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
-                      {(hasMultiLine || (activeTab === "app" && isLongMessage)) && !entry.data && (
-                        <pre className="p-3 bg-muted rounded-md text-xs overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
-                          {entry.message}
-                        </pre>
-                      )}
-                      {entry.data && (
-                        <pre className="p-3 bg-muted rounded-md text-xs overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
-                          {JSON.stringify(entry.data, null, 2)}
-                        </pre>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  entry={entry}
+                  idx={idx}
+                  isExpanded={isExpanded}
+                  hasMultiLine={hasMultiLine}
+                  hasExtra={hasExtra}
+                  activeTab={activeTab}
+                  onToggle={() => {
+                    if (activeTab === "ai" && hasExtra) {
+                      toggleExpand(idx);
+                    } else if (activeTab === "app") {
+                      toggleAppExpand(idx);
+                    }
+                  }}
+                />
                 );
               })
             )}

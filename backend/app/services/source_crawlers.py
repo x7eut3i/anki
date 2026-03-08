@@ -854,7 +854,7 @@ def extract_article_author(html: str, url: str = "") -> str:
 
 # Domain → Chinese source name mapping
 _DOMAIN_SOURCE_MAP = {
-    "people.com.cn": "人民网",
+    "people.com.cn": "人民日报",
     "xinhuanet.com": "新华网",
     "news.cn": "新华网",
     "gmw.cn": "光明网",

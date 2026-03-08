@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useAuthStore } from "@/lib/store";
+import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,6 +18,7 @@ async function fetchStudyStats(token: string, params: { days?: number; period?: 
   if (params.period) q.set("period", params.period);
   if (params.start) q.set("start", params.start);
   if (params.end) q.set("end", params.end);
+  q.set("tz", getUserTimezone());
   const res = await fetch(`${API_BASE}/api/stats/study?${q.toString()}`, {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
   });

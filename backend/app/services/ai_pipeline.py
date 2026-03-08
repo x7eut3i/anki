@@ -105,8 +105,8 @@ async def _rpm_acquire(config) -> bool:
             # Window full – calculate how long until the oldest entry expires
             wait_time = 60.0 - (now - _rpm_timestamps[0]) + 0.1
 
-        logger.info("RPM rate limit: window full, waiting %.1fs (limit=%d/min)",
-                    wait_time, _rpm_limit)
+        #logger.info("RPM rate limit: window full, waiting %.1fs (limit=%d/min)",
+        #            wait_time, _rpm_limit)
         await asyncio.sleep(wait_time)
 
     # ── Step 2: concurrency check (at most N in-flight) ──
@@ -231,6 +231,22 @@ async def _ai_call_with_retry(
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     resp = await client.post(url, json=payload, headers=headers)
+
+                    # Check response body for quota exhaustion (may arrive on any status)
+                    if config:
+                        try:
+                            resp_text = resp.text
+                            if "配额已用尽" in resp_text:
+                                fallback_name = _activate_fallback(config, "配额已用尽")
+                                if fallback_name and payload.get("model") != fallback_name:
+                                    payload = {**payload, "model": fallback_name}
+                                    logger.warning(
+                                        "%s: quota exhausted (配额已用尽), switching to fallback model %s",
+                                        feature, fallback_name,
+                                    )
+                                    continue
+                        except Exception:
+                            pass
 
                     # Check for rate limit or server errors that warrant fallback
                     if resp.status_code in (429, 500, 502, 503, 529) and config:

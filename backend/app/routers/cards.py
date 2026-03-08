@@ -1,4 +1,6 @@
 import logging
+import json
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,6 +14,7 @@ from app.models.card import Card
 from app.models.deck import Deck
 from app.models.user import User
 from app.models.user_card_progress import UserCardProgress
+from app.models.ai_config import AIConfig
 from app.schemas.card import (
     CardCreate,
     CardUpdate,
@@ -315,3 +318,130 @@ def delete_card(
         deck.card_count = actual_count
         session.add(deck)
         session.commit()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Regenerate alternate questions via AI
+# ──────────────────────────────────────────────────────────────────────
+
+_REGEN_SYSTEM_PROMPT = """\
+你是公务员考试闪卡的出题专家。用户会给你一张现有卡片的信息，请为该卡片重新生成2到3个变体选择题（alternate_questions）。
+
+要求：
+1. 每个变体题必须从不同角度考察同一知识点
+2. 每个变体题必须包含: type("choice"), question(题面), answer(正确答案), distractors(3个错误选项)
+3. 【自包含原则】question必须完全独立、自包含，能作为问答题独立使用
+4. 严禁出现"下列""以下""哪个""哪种"等指代性词语
+5. question应该可以用一句话直接回答
+6. distractors是错误的答案/释义，要有一定迷惑性但明确是错误的
+
+只返回JSON数组，不要markdown代码块标记。格式：
+[
+  {"type": "choice", "question": "...", "answer": "...", "distractors": ["...", "...", "..."]},
+  {"type": "choice", "question": "...", "answer": "...", "distractors": ["...", "...", "..."]}
+]
+"""
+
+
+@router.post("/{card_id}/regenerate-questions")
+async def regenerate_questions(
+    card_id: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Use AI to regenerate alternate_questions for a card. Returns the
+    generated questions for user review (does NOT save automatically)."""
+
+    card = session.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    config = session.exec(
+        select(AIConfig).where(
+            AIConfig.user_id == current_user.id,
+            AIConfig.is_enabled == True,
+        )
+    ).first()
+    if not config:
+        raise HTTPException(status_code=400, detail="请先在设置中配置AI服务")
+
+    # Build user prompt with card context
+    meta = {}
+    try:
+        meta = json.loads(card.meta_info) if card.meta_info else {}
+    except Exception:
+        pass
+
+    user_prompt = (
+        f"请为以下卡片重新生成2-3个变体选择题：\n\n"
+        f"题面(front): {card.front}\n"
+        f"答案(back): {card.back}\n"
+        f"解析(explanation): {card.explanation or '无'}\n"
+    )
+    if meta.get("knowledge_type"):
+        user_prompt += f"知识类型: {meta['knowledge_type']}\n"
+    if meta.get("subject"):
+        user_prompt += f"主题: {meta['subject']}\n"
+    knowledge = meta.get("knowledge", {})
+    if knowledge.get("key_points"):
+        pts = knowledge["key_points"]
+        user_prompt += f"核心考点: {', '.join(pts) if isinstance(pts, list) else pts}\n"
+
+    # Make AI call
+    import httpx
+    from app.services.json_repair import robust_json_parse
+
+    model = config.model_pipeline or config.model or "gpt-4o-mini"
+    url = f"{config.api_base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {config.api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _REGEN_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.8,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        content = data["choices"][0]["message"]["content"]
+        questions = robust_json_parse(content)
+
+        if not isinstance(questions, list):
+            raise ValueError("AI returned non-array response")
+
+        # Validate structure
+        validated = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            if not q.get("question") or not q.get("answer"):
+                continue
+            validated.append({
+                "type": q.get("type", "choice"),
+                "question": q["question"],
+                "answer": q["answer"],
+                "distractors": q.get("distractors", [])[:3],
+            })
+
+        if not validated:
+            raise ValueError("No valid questions generated")
+
+        return {"questions": validated}
+
+    except httpx.HTTPStatusError as e:
+        logger.error("AI call failed for regenerate-questions: HTTP %d", e.response.status_code)
+        raise HTTPException(
+            status_code=502, detail=f"AI服务调用失败: HTTP {e.response.status_code}"
+        )
+    except Exception as e:
+        logger.error("regenerate-questions failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)[:200]}")

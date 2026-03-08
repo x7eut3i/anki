@@ -483,7 +483,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             if not publish_date:
                                 publish_date = fetch_result["publish_date"]
 
-                            if len(body_text) < 100:
+                            if len(body_text) < 600:
                                 async with state_lock:
                                     add_entry("skip", source_label,
                                               f"正文太短（{len(body_text)}字），跳过: {title[:40]}")

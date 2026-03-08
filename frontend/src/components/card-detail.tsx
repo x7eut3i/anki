@@ -227,6 +227,13 @@ export function CardDetailPanel({ card, searchQuery }: { card: any; searchQuery?
   const facts = metaInfo?.facts as Record<string, string> | undefined;
   const altQuestions = metaInfo?.alternate_questions as any[] | undefined;
 
+  // Extract pinyin from multiple possible locations
+  const pinyin = metaInfo?.pinyin
+    || metaInfo?.meta_info?.pinyin
+    || (facts as any)?.pinyin
+    || null;
+  const isIdiom = metaInfo?.knowledge_type === "idiom";
+
   return (
     <div className="space-y-4 pt-3 border-t">
       {/* Answer */}
@@ -235,17 +242,22 @@ export function CardDetailPanel({ card, searchQuery }: { card: any; searchQuery?
           ✅ 答案
         </div>
         <div className="text-sm font-medium">{searchQuery ? <HighlightText text={card.back} query={searchQuery} /> : card.back}</div>
-        {metaInfo?.pinyin && (
-          <div className="mt-1 text-xs text-green-700/70 dark:text-green-300/70 italic">
-            拼音：{metaInfo.pinyin}
-          </div>
-        )}
         {metaInfo?.example_sentence && (
           <div className="mt-1 text-xs text-green-800/70 dark:text-green-200/70">
             📝 例句：{metaInfo.example_sentence}
           </div>
         )}
       </div>
+
+      {/* Pinyin — dedicated section for idiom cards or whenever pinyin exists */}
+      {pinyin && (
+        <div className="bg-teal-50 dark:bg-teal-950/30 rounded-lg p-3">
+          <div className="text-xs font-semibold text-teal-700 dark:text-teal-400 mb-1 flex items-center gap-1">
+            🔤 拼音
+          </div>
+          <div className="text-sm font-medium tracking-wider">{pinyin}</div>
+        </div>
+      )}
 
       {/* Distractors */}
       {distractors.length > 0 && (
@@ -297,13 +309,17 @@ export function CardDetailPanel({ card, searchQuery }: { card: any; searchQuery?
       )}
 
       {/* Facts */}
-      {facts && Object.keys(facts).length > 0 && (
+      {facts && Object.keys(facts).length > 0 && (() => {
+        // Filter out pinyin from facts if already displayed in dedicated section
+        const factsEntries = Object.entries(facts).filter(([k]) => k !== "pinyin");
+        if (factsEntries.length === 0) return null;
+        return (
         <div className="bg-amber-50 dark:bg-amber-950/20 rounded-lg p-3">
           <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1.5 flex items-center gap-1">
             📋 关键事实
           </div>
           <div className="grid gap-1 text-sm">
-            {Object.entries(facts).map(([k, v]) => {
+            {factsEntries.map(([k, v]) => {
               const { label, icon } = getFriendlyLabel(k);
               return (
                 <div key={k} className="flex items-start gap-1">
@@ -314,7 +330,8 @@ export function CardDetailPanel({ card, searchQuery }: { card: any; searchQuery?
             })}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Exam focus */}
       {examFocus && (
