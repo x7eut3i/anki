@@ -483,7 +483,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             if not publish_date:
                                 publish_date = fetch_result["publish_date"]
 
-                            if len(body_text) < 600:
+                            if len(body_text) < 500:
                                 async with state_lock:
                                     add_entry("skip", source_label,
                                               f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
@@ -632,9 +632,25 @@ async def _run_pipeline_internal(run_type: str = "manual"):
             session.commit()
 
     finally:
+        # Safety: ensure log status is updated even if the main commit failed
+        log_id_to_fix = _running_log_id
         _running_log_id = None
         _cancel_requested = False
         _running_lock.release()
+        if log_id_to_fix is not None:
+            try:
+                from sqlmodel import Session as SyncSession
+                from app.database import engine as db_engine
+                with SyncSession(db_engine) as fix_session:
+                    stuck = fix_session.get(IngestionLog, log_id_to_fix)
+                    if stuck and stuck.status == "running":
+                        stuck.status = "error"
+                        stuck.finished_at = datetime.now(timezone.utc)
+                        fix_session.add(stuck)
+                        fix_session.commit()
+                        logger.warning("Safety: forced ingestion log #%d from 'running' to 'error'", log_id_to_fix)
+            except Exception as e:
+                logger.error("Failed to fix stuck ingestion log #%d: %s", log_id_to_fix, e)
 
 
 async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
@@ -832,7 +848,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             if not publish_date:
                                 publish_date = fetch_result["publish_date"]
 
-                            if len(body_text) < 100:
+                            if len(body_text) < 600:
                                 async with state_lock:
                                     add_entry("skip", source_label,
                                               f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
@@ -975,9 +991,23 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
             session.commit()
 
     finally:
+        # Safety: ensure log status is updated even if the main commit failed
+        log_id_to_fix = _running_log_id
         _running_log_id = None
         _cancel_requested = False
         _running_lock.release()
+        if log_id_to_fix is not None:
+            try:
+                with SyncSession(db_engine) as fix_session:
+                    stuck = fix_session.get(IngestionLog, log_id_to_fix)
+                    if stuck and stuck.status == "running":
+                        stuck.status = "error"
+                        stuck.finished_at = datetime.now(timezone.utc)
+                        fix_session.add(stuck)
+                        fix_session.commit()
+                        logger.warning("Safety: forced RMRB backfill log #%d from 'running' to 'error'", log_id_to_fix)
+            except Exception as e:
+                logger.error("Failed to fix stuck RMRB log #%d: %s", log_id_to_fix, e)
 
 
 async def _run_qiushi_backfill_internal(issues: list[dict]):
@@ -1174,7 +1204,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             if not publish_date:
                                 publish_date = fetch_result["publish_date"]
 
-                            if len(body_text) < 100:
+                            if len(body_text) < 600:
                                 async with state_lock:
                                     add_entry("skip", source_label,
                                               f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
@@ -1317,9 +1347,23 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
             session.commit()
 
     finally:
+        # Safety: ensure log status is updated even if the main commit failed
+        log_id_to_fix = _running_log_id
         _running_log_id = None
         _cancel_requested = False
         _running_lock.release()
+        if log_id_to_fix is not None:
+            try:
+                with SyncSession(db_engine) as fix_session:
+                    stuck = fix_session.get(IngestionLog, log_id_to_fix)
+                    if stuck and stuck.status == "running":
+                        stuck.status = "error"
+                        stuck.finished_at = datetime.now(timezone.utc)
+                        fix_session.add(stuck)
+                        fix_session.commit()
+                        logger.warning("Safety: forced Qiushi backfill log #%d from 'running' to 'error'", log_id_to_fix)
+            except Exception as e:
+                logger.error("Failed to fix stuck Qiushi log #%d: %s", log_id_to_fix, e)
 
 
 @router.post("/run")

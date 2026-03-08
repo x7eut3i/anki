@@ -215,88 +215,88 @@ async def _ai_call_with_retry(
     """
     last_error = None
 
-    # Apply RPM rate limiting — blocks until both sliding window and
-    # concurrency semaphore allow a new request.
-    rpm_active = False
-    if config:
-        rpm_active = await _rpm_acquire(config)
+    # Apply fallback model if active
+    if config and _should_use_fallback() and _fallback_model_name:
+        payload = {**payload, "model": _fallback_model_name}
+        logger.info("%s: using fallback model %s", feature, _fallback_model_name)
 
-    try:
-        # Apply fallback model if active
-        if config and _should_use_fallback() and _fallback_model_name:
-            payload = {**payload, "model": _fallback_model_name}
-            logger.info("%s: using fallback model %s", feature, _fallback_model_name)
+    for attempt in range(max_retries):
+        # Apply RPM rate limiting for EACH attempt — blocks until both
+        # sliding window and concurrency semaphore allow a new request.
+        rpm_active = False
+        if config:
+            rpm_active = await _rpm_acquire(config)
 
-        for attempt in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url, json=payload, headers=headers)
 
-                    # Check response body for quota exhaustion (may arrive on any status)
-                    if config:
-                        try:
-                            resp_text = resp.text
-                            if "配额已用尽" in resp_text:
-                                fallback_name = _activate_fallback(config, "配额已用尽")
-                                if fallback_name and payload.get("model") != fallback_name:
-                                    payload = {**payload, "model": fallback_name}
-                                    logger.warning(
-                                        "%s: quota exhausted (配额已用尽), switching to fallback model %s",
-                                        feature, fallback_name,
-                                    )
-                                    continue
-                        except Exception:
-                            pass
+                # Check response body for quota exhaustion (may arrive on any status)
+                if config:
+                    try:
+                        resp_text = resp.text
+                        if "配额已用尽" in resp_text:
+                            fallback_name = _activate_fallback(config, "配额已用尽")
+                            if fallback_name and payload.get("model") != fallback_name:
+                                payload = {**payload, "model": fallback_name}
+                                logger.warning(
+                                    "%s: quota exhausted (配额已用尽), switching to fallback model %s",
+                                    feature, fallback_name,
+                                )
+                                continue
+                    except Exception:
+                        pass
 
-                    # Check for rate limit or server errors that warrant fallback
-                    if resp.status_code in (429, 500, 502, 503, 529) and config:
-                        error_reason = f"HTTP {resp.status_code}"
-                        try:
-                            err_body = resp.json()
-                            if "error" in err_body:
-                                err_obj = err_body["error"]
-                                error_reason = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
-                        except Exception:
-                            pass
+                # Check for rate limit or server errors that warrant fallback
+                if resp.status_code in (429, 500, 502, 503, 529) and config:
+                    error_reason = f"HTTP {resp.status_code}"
+                    try:
+                        err_body = resp.json()
+                        if "error" in err_body:
+                            err_obj = err_body["error"]
+                            error_reason = err_obj.get("message", "") if isinstance(err_obj, dict) else str(err_obj)
+                    except Exception:
+                        pass
 
-                        fallback_name = _activate_fallback(config, f"{error_reason} (HTTP {resp.status_code})")
-                        if fallback_name and payload.get("model") != fallback_name:
-                            # Retry immediately with fallback model
-                            payload = {**payload, "model": fallback_name}
-                            logger.warning(
-                                "%s: HTTP %d, switching to fallback model %s and retrying",
-                                feature, resp.status_code, fallback_name,
-                            )
-                            continue
+                    fallback_name = _activate_fallback(config, f"{error_reason} (HTTP {resp.status_code})")
+                    if fallback_name and payload.get("model") != fallback_name:
+                        # Retry with fallback model (RPM released in finally)
+                        payload = {**payload, "model": fallback_name}
+                        logger.warning(
+                            "%s: HTTP %d, switching to fallback model %s and retrying",
+                            feature, resp.status_code, fallback_name,
+                        )
+                        continue
 
-                    resp.raise_for_status()
-                return resp.json()
-            except Exception as err:
-                last_error = err
+                resp.raise_for_status()
+            return resp.json()
+        except Exception as err:
+            last_error = err
 
-                # Check if this is an HTTP error that warrants fallback activation
-                if config and isinstance(err, httpx.HTTPStatusError):
-                    status_code = err.response.status_code
-                    if status_code in (429, 500, 502, 503, 529):
-                        fallback_name = _activate_fallback(config, f"HTTP {status_code}")
-                        if fallback_name and payload.get("model") != fallback_name:
-                            payload = {**payload, "model": fallback_name}
-                            logger.warning(
-                                "%s: activated fallback model %s after HTTP %d",
-                                feature, fallback_name, status_code,
-                            )
+            # Check if this is an HTTP error that warrants fallback activation
+            if config and isinstance(err, httpx.HTTPStatusError):
+                status_code = err.response.status_code
+                if status_code in (429, 500, 502, 503, 529):
+                    fallback_name = _activate_fallback(config, f"HTTP {status_code}")
+                    if fallback_name and payload.get("model") != fallback_name:
+                        payload = {**payload, "model": fallback_name}
+                        logger.warning(
+                            "%s: activated fallback model %s after HTTP %d",
+                            feature, fallback_name, status_code,
+                        )
 
-                if attempt < max_retries - 1:
-                    logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
-                    await asyncio.sleep(2 * (attempt + 1))
-                else:
-                    logger.error("%s failed after %d attempts: %s", feature, max_retries, err)
-        raise last_error  # type: ignore[misc]
-    finally:
-        # Release concurrency slot immediately so other requests can proceed.
-        # The sliding-window timestamp remains and ages out after 60 s.
-        if rpm_active:
-            _rpm_release()
+            if attempt < max_retries - 1:
+                logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
+                await asyncio.sleep(2 * (attempt + 1))
+            else:
+                logger.error("%s failed after %d attempts: %s", feature, max_retries, err)
+        finally:
+            # Release RPM slot after each attempt so the next attempt
+            # re-acquires and respects the sliding-window rate limit.
+            if rpm_active:
+                _rpm_release()
+
+    raise last_error  # type: ignore[misc]
 
 
 def _extract_ai_content(result: dict) -> str:

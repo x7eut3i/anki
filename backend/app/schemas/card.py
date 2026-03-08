@@ -22,6 +22,7 @@ class CardUpdate(BaseModel):
     distractors: str | None = None
     tags: str | None = None
     meta_info: str | None = None
+    source: str | None = None
     category_id: int | None = None
     is_suspended: bool | None = None  # Updates UserCardProgress for the current user
     expires_at: datetime | None = None

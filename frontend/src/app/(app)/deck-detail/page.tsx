@@ -241,6 +241,7 @@ export default function DeckDetailPage() {
       distractors: distractors.join("\n"),
       tags: card.tags || "",
       source: card.source || "",
+      meta_info: meta ? JSON.stringify(meta, null, 2) : "",
     });
   };
 
@@ -258,9 +259,22 @@ export default function DeckDetailPage() {
         back: editForm.back,
         explanation: editForm.explanation,
         distractors: JSON.stringify(distractorsArr),
+        source: editForm.source,
       };
       if (editForm.tags !== (editingCard.tags || "")) {
         updateData.tags = editForm.tags;
+      }
+      if (editForm.meta_info.trim()) {
+        try {
+          JSON.parse(editForm.meta_info);
+          updateData.meta_info = editForm.meta_info;
+        } catch {
+          alert("meta_info 不是有效的 JSON 格式");
+          setSaving(false);
+          return;
+        }
+      } else {
+        updateData.meta_info = "";
       }
       const updated = await cardApi.update(editingCard.id, updateData, token);
       setCards((prev) => prev.map((c) => c.id === editingCard.id ? { ...c, ...updated } : c));
@@ -748,6 +762,23 @@ export default function DeckDetailPage() {
                   className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                   value={editForm.tags}
                   onChange={(e) => setEditForm({ ...editForm, tags: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">来源 (source)</label>
+                <input
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  value={editForm.source}
+                  onChange={(e) => setEditForm({ ...editForm, source: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-1 block">元信息 (meta_info) — JSON</label>
+                <textarea
+                  className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
+                  value={editForm.meta_info}
+                  onChange={(e) => setEditForm({ ...editForm, meta_info: e.target.value })}
+                  placeholder='{"knowledge": "...", "exam_focus": "..."}'
                 />
               </div>
             </div>

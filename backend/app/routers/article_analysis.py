@@ -145,6 +145,18 @@ def list_analyses(
         for art_id, tag_id, tag_name, tag_color in tag_rows:
             article_tag_map.setdefault(art_id, []).append({"id": tag_id, "name": tag_name, "color": tag_color})
 
+    # Count related cards per article (by source_url match)
+    from app.models.card import Card
+    card_count_map: dict[str, int] = {}
+    article_urls = [item.source_url for item in items if item.source_url]
+    if article_urls:
+        card_counts = session.exec(
+            select(Card.source, func.count(Card.id))
+            .where(col(Card.source).in_(article_urls))
+            .group_by(Card.source)
+        ).all()
+        card_count_map = {url: count for url, count in card_counts}
+
     result = []
     for item in items:
         result.append({
@@ -161,6 +173,7 @@ def list_analyses(
             "created_at": item.created_at.isoformat(),
             "updated_at": item.updated_at.isoformat(),
             "tags_list": article_tag_map.get(item.id, []),
+            "card_count": card_count_map.get(item.source_url, 0),
         })
 
     return {"items": result, "total": total, "page": page, "page_size": page_size, "source_names": source_names}

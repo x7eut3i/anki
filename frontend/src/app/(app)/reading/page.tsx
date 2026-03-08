@@ -71,6 +71,7 @@ interface AnalysisItem {
   created_at: string;
   updated_at: string;
   tags_list?: { id: number; name: string; color: string }[];
+  card_count?: number;
 }
 
 interface Highlight {
@@ -962,8 +963,17 @@ export default function ReadingPage() {
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [urlInput, setUrlInput] = useState("");
 
-  // Active tab in detail view
-  const [activeTab, setActiveTab] = useState<"annotated" | "analysis" | "exam">("annotated");
+  // Active tab in detail view (persisted to localStorage)
+  const [activeTab, setActiveTabState] = useState<"annotated" | "analysis" | "exam">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("reading_detail_tab") as "annotated" | "analysis" | "exam") || "annotated";
+    }
+    return "annotated";
+  });
+  const setActiveTab = useCallback((tab: "annotated" | "analysis" | "exam") => {
+    setActiveTabState(tab);
+    localStorage.setItem("reading_detail_tab", tab);
+  }, []);
 
   // AI Chat
   const [showChat, setShowChat] = useState(false);
@@ -2109,8 +2119,11 @@ export default function ReadingPage() {
                       </span>
                       <QualityBadge score={item.quality_score} />
                       {item.source_name && <span>{item.source_name}</span>}
-                      {item.publish_date && <span>{item.publish_date}</span>}
+                      {item.publish_date && <span>{formatDateTime(item.publish_date, { dateOnly: true })}</span>}
                       <span>{item.word_count} 字</span>
+                      {(item.card_count ?? 0) > 0 && (
+                        <span className="text-primary">🃏 {item.card_count} 张卡片</span>
+                      )}
                       <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
                     {/* Article tags */}

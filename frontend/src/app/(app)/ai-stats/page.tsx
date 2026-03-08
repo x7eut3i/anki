@@ -155,6 +155,8 @@ export default function AIStatsPage() {
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
           >
+            <option value={1}>今天</option>
+            <option value={2}>近2天</option>
             <option value={7}>最近7天</option>
             <option value={30}>最近30天</option>
             <option value={90}>最近90天</option>

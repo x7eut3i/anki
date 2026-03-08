@@ -446,6 +446,38 @@ export default function IngestionPage() {
                         <span className="text-sm font-medium">
                           {formatDateTime(log.started_at)}
                         </span>
+                        {log.finished_at && (
+                          <span className="text-xs text-muted-foreground">
+                            → {formatDateTime(log.finished_at)}
+                            {" · "}
+                            {(() => {
+                              const ms = new Date(log.finished_at).getTime() - new Date(log.started_at).getTime();
+                              const s = Math.floor(ms / 1000);
+                              if (s < 60) return `${s}秒`;
+                              const m = Math.floor(s / 60);
+                              const rs = s % 60;
+                              if (m < 60) return `${m}分${rs > 0 ? rs + "秒" : ""}`;
+                              const h = Math.floor(m / 60);
+                              const rm = m % 60;
+                              return `${h}时${rm > 0 ? rm + "分" : ""}`;
+                            })()}
+                          </span>
+                        )}
+                        {isRunning && (
+                          <span className="text-xs text-blue-500">
+                            已运行 {(() => {
+                              const ms = Date.now() - new Date(log.started_at).getTime();
+                              const s = Math.floor(ms / 1000);
+                              if (s < 60) return `${s}秒`;
+                              const m = Math.floor(s / 60);
+                              const rs = s % 60;
+                              if (m < 60) return `${m}分${rs > 0 ? rs + "秒" : ""}`;
+                              const h = Math.floor(m / 60);
+                              const rm = m % 60;
+                              return `${h}时${rm > 0 ? rm + "分" : ""}`;
+                            })()}
+                          </span>
+                        )}
                         <Badge variant="outline" className="text-xs">
                           {log.run_type === "manual" ? "手动" : log.run_type === "backfill" ? "回溯" : "定时"}
                         </Badge>
