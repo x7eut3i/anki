@@ -110,6 +110,8 @@ def create_session(
         exclude_ai_decks=data.exclude_ai_decks,
         card_limit=data.card_limit,
         quiz_time_limit=data.quiz_time_limit,
+        question_mode=data.question_mode,
+        custom_ratio=data.custom_ratio,
     )
     logger.debug("Study session created: id=%d mode=%s cards=%d",
                 session_obj.id, data.mode, session_obj.total_cards)

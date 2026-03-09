@@ -28,5 +28,9 @@ class StudySession(SQLModel, table=True):
     # Remaining card IDs (JSON array) for session recovery
     remaining_card_ids: str = Field(default="[]")
 
+    # Question type settings for this session
+    question_mode: str = Field(default="custom")  # all_qa, all_choice, custom
+    custom_ratio: int = Field(default=60)  # QA percentage (0-100)
+
     # Dynamic question answer map: JSON {"question_id": "correct_answer", ...}
     quiz_answer_map: str = Field(default="{}")

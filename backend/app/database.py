@@ -62,6 +62,8 @@ def _migrate_add_columns():
         ("users", "timezone", "TEXT DEFAULT 'Asia/Shanghai'"),
         ("users", "study_question_mode", "TEXT DEFAULT 'custom'"),
         ("users", "study_custom_ratio", "INTEGER DEFAULT 60"),
+        ("study_sessions", "question_mode", "TEXT DEFAULT 'custom'"),
+        ("study_sessions", "custom_ratio", "INTEGER DEFAULT 60"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

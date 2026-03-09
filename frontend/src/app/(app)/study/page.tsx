@@ -101,6 +101,8 @@ export default function StudyPage() {
       // Create a study session which fetches and stores due cards
       const cardLimit = parseInt(params.get("limit") || "50") || 50;
       const sessionParams: any = { mode: mode === "mix" ? "mix" : "review", card_limit: cardLimit };
+      sessionParams.question_mode = questionMode;
+      sessionParams.custom_ratio = customRatio;
       if (categoryIds.length > 0) sessionParams.category_ids = categoryIds;
       if (deckIds.length > 0) sessionParams.deck_ids = deckIds;
       else if (deckId) sessionParams.deck_id = parseInt(deckId);
@@ -157,6 +159,9 @@ export default function StudyPage() {
     setPendingSession(null);
     try {
       setSessionId(pendingSession.id);
+      // Restore question type settings from session
+      if (pendingSession.question_mode) setQuestionMode(pendingSession.question_mode);
+      if (pendingSession.custom_ratio != null) setCustomRatio(pendingSession.custom_ratio);
       const remaining = JSON.parse(pendingSession.remaining_card_ids || "[]");
       // Fetch the actual card data for remaining card IDs
       const data = await review.getDue({ limit: 200 }, token);
@@ -164,6 +169,7 @@ export default function StudyPage() {
       const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
       if (resumeCards.length > 0) {
         setCards(resumeCards);
+        computeForceTypes(resumeCards, pendingSession.question_mode, pendingSession.custom_ratio);
         setReviewedCount(pendingSession.cards_reviewed || 0);
       } else {
         // Cards may have been reviewed already, start fresh
@@ -214,12 +220,15 @@ export default function StudyPage() {
             if (remaining.length > 0) {
               // Auto-resume directly
               setSessionId(session.id);
+              // Restore question type settings from session
+              if (session.question_mode) setQuestionMode(session.question_mode);
+              if (session.custom_ratio != null) setCustomRatio(session.custom_ratio);
               const data = await review.getDue({ limit: 200 }, token);
               const remainingSet = new Set(remaining);
               const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
               if (resumeCards.length > 0) {
                 setCards(resumeCards);
-                computeForceTypes(resumeCards);
+                computeForceTypes(resumeCards, session.question_mode, session.custom_ratio);
                 setReviewedCount(session.cards_reviewed || 0);
                 setLoading(false);
                 return;

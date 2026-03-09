@@ -291,6 +291,8 @@ class ReviewService:
         exclude_ai_decks: bool = False,
         card_limit: int = 50,
         quiz_time_limit: int = 0,
+        question_mode: str = "custom",
+        custom_ratio: int = 60,
     ) -> StudySession:
         """Create a new study session with selected cards.
 
@@ -328,6 +330,8 @@ class ReviewService:
             total_cards=len(card_ids),
             remaining_card_ids=json.dumps(card_ids),
             quiz_time_limit=quiz_time_limit,
+            question_mode=question_mode,
+            custom_ratio=custom_ratio,
         )
         self.session.add(session_obj)
         self.session.commit()
