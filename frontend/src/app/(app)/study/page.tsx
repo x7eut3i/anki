@@ -7,9 +7,10 @@ import { review, auth } from "@/lib/api";
 import Flashcard from "@/components/flashcard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, Trophy, RotateCcw, PlayCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Trophy, RotateCcw, PlayCircle } from "lucide-react";
 import Link from "next/link";
 import { CardTagManager } from "@/components/card-detail";
+import { useSwipe } from "@/hooks/use-swipe";
 
 export default function StudyPage() {
   const { token } = useAuthStore();
@@ -29,8 +30,12 @@ export default function StudyPage() {
     currentCards,
     currentIndex,
     showAnswer,
+    reviewedIndices,
     setCards,
+    initSession,
     nextCard,
+    prevCard,
+    markReviewed,
     toggleAnswer,
     updateCurrentCard,
     reset,
@@ -152,33 +157,66 @@ export default function StudyPage() {
     }
   }, [token, setCards, categoryIds, deckId, deckIds, mode]);
 
-  // Resume an unfinished session
+  // Resume an unfinished session (with history of reviewed cards)
+  const _resumeWithHistory = useCallback(async (sess: any) => {
+    setSessionId(sess.id);
+    if (sess.question_mode) setQuestionMode(sess.question_mode);
+    if (sess.custom_ratio != null) setCustomRatio(sess.custom_ratio);
+
+    const remaining: number[] = JSON.parse(sess.remaining_card_ids || "[]");
+    const allIds: number[] = JSON.parse(sess.all_card_ids || "[]");
+    const remainingSet = new Set(remaining);
+
+    // If we have the full card list, fetch all cards for history navigation
+    if (allIds.length > 0) {
+      const data = await review.getDue({ card_ids: allIds }, token!);
+      const allCards: any[] = data.cards || [];
+      if (allCards.length > 0) {
+        // Sort: reviewed cards first (in original order), then remaining
+        const reviewedCards = allIds
+          .filter((id) => !remainingSet.has(id))
+          .map((id) => allCards.find((c: any) => c.id === id))
+          .filter(Boolean);
+        const remainingCards = allIds
+          .filter((id) => remainingSet.has(id))
+          .map((id) => allCards.find((c: any) => c.id === id))
+          .filter(Boolean);
+        const orderedCards = [...reviewedCards, ...remainingCards];
+
+        // Build reviewed indices set (first N cards are already reviewed)
+        const reviewedIdxSet = new Set<number>();
+        for (let i = 0; i < reviewedCards.length; i++) reviewedIdxSet.add(i);
+
+        initSession(orderedCards, reviewedCards.length, reviewedIdxSet);
+        computeForceTypes(orderedCards, sess.question_mode, sess.custom_ratio);
+        setReviewedCount(sess.cards_reviewed || 0);
+        return true;
+      }
+    }
+
+    // Fallback: old session without all_card_ids — load remaining only
+    const data = await review.getDue({ limit: 200 }, token!);
+    const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
+    if (resumeCards.length > 0) {
+      setCards(resumeCards);
+      computeForceTypes(resumeCards, sess.question_mode, sess.custom_ratio);
+      setReviewedCount(sess.cards_reviewed || 0);
+      return true;
+    }
+    return false;
+  }, [token, initSession, setCards, computeForceTypes]);
+
   const resumeSession = useCallback(async () => {
     if (!token || !pendingSession) return;
     setLoading(true);
     setPendingSession(null);
     try {
-      setSessionId(pendingSession.id);
-      // Restore question type settings from session
-      if (pendingSession.question_mode) setQuestionMode(pendingSession.question_mode);
-      if (pendingSession.custom_ratio != null) setCustomRatio(pendingSession.custom_ratio);
-      const remaining = JSON.parse(pendingSession.remaining_card_ids || "[]");
-      // Fetch the actual card data for remaining card IDs
-      const data = await review.getDue({ limit: 200 }, token);
-      const remainingSet = new Set(remaining);
-      const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
-      if (resumeCards.length > 0) {
-        setCards(resumeCards);
-        computeForceTypes(resumeCards, pendingSession.question_mode, pendingSession.custom_ratio);
-        setReviewedCount(pendingSession.cards_reviewed || 0);
-      } else {
-        // Cards may have been reviewed already, start fresh
-        await loadCards();
-      }
+      const ok = await _resumeWithHistory(pendingSession);
+      if (!ok) await loadCards();
     } finally {
       setLoading(false);
     }
-  }, [token, pendingSession, setCards, loadCards]);
+  }, [token, pendingSession, _resumeWithHistory, loadCards]);
 
   // Save settings to user profile and start studying
   const startWithConfig = useCallback(async () => {
@@ -218,18 +256,9 @@ export default function StudyPage() {
           if (session && !session.is_completed && session.mode !== "quiz") {
             const remaining = JSON.parse(session.remaining_card_ids || "[]");
             if (remaining.length > 0) {
-              // Auto-resume directly
-              setSessionId(session.id);
-              // Restore question type settings from session
-              if (session.question_mode) setQuestionMode(session.question_mode);
-              if (session.custom_ratio != null) setCustomRatio(session.custom_ratio);
-              const data = await review.getDue({ limit: 200 }, token);
-              const remainingSet = new Set(remaining);
-              const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
-              if (resumeCards.length > 0) {
-                setCards(resumeCards);
-                computeForceTypes(resumeCards, session.question_mode, session.custom_ratio);
-                setReviewedCount(session.cards_reviewed || 0);
+              // Auto-resume with history
+              const ok = await _resumeWithHistory(session);
+              if (ok) {
                 setLoading(false);
                 return;
               }
@@ -261,28 +290,40 @@ export default function StudyPage() {
     if (!token) return;
     const card = currentCards[currentIndex];
     const durationMs = Math.min(Date.now() - cardStartTime, 600000); // cap at 10 min
+    const wasAlreadyReviewed = reviewedIndices.has(currentIndex);
     try {
       await review.answer({ card_id: card.id, rating, review_duration_ms: durationMs }, token);
-      setReviewedCount((c) => c + 1);
+      markReviewed(currentIndex);
 
-      // Update session progress if we have an active session
-      if (sessionId) {
-        try {
-          await review.updateProgress(sessionId, card.id, rating >= 3, token);
-        } catch {
-          // Non-critical: session tracking failure shouldn't block study
+      if (!wasAlreadyReviewed) {
+        setReviewedCount((c) => c + 1);
+
+        // Advance immediately — no await in between to prevent flash
+        if (currentIndex + 1 < currentCards.length) {
+          nextCard();
+        } else {
+          setCompleted(true);
+        }
+
+        // Fire-and-forget session progress update
+        if (sessionId) {
+          review.updateProgress(sessionId, card.id, rating >= 3, token).catch(() => {});
         }
       }
-
-      if (currentIndex + 1 < currentCards.length) {
-        nextCard();
-      } else {
-        setCompleted(true);
-      }
+      // Re-rating: stay on current card, don't update session progress
     } catch (err) {
       console.error("Review failed:", err);
     }
   };
+
+  // Swipe hook MUST be called unconditionally (Rules of Hooks — before any early return)
+  const swipeRef = useSwipe<HTMLDivElement>({
+    onSwipeLeft: () => {
+      const reviewed = reviewedIndices.has(currentIndex);
+      if (currentIndex < currentCards.length - 1 && reviewed) nextCard();
+    },
+    onSwipeRight: () => { if (currentIndex > 0) prevCard(); },
+  });
 
   if (loading) {
     return (
@@ -427,9 +468,15 @@ export default function StudyPage() {
   if (!card) return null;
 
   const progress = ((currentIndex + 1) / currentCards.length) * 100;
+  const isCurrentReviewed = reviewedIndices.has(currentIndex);
+  const canGoPrev = currentIndex > 0;
+  const canGoNext = currentIndex < currentCards.length - 1 && isCurrentReviewed;
+
+  const handlePrev = () => { if (canGoPrev) prevCard(); };
+  const handleNext = () => { if (canGoNext) nextCard(); };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-4">
+    <div className="max-w-2xl mx-auto space-y-4" ref={swipeRef}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <Link href="/dashboard">
@@ -438,13 +485,32 @@ export default function StudyPage() {
             返回
           </Button>
         </Link>
-        <span className="text-sm text-muted-foreground">
-          {mode === "mix" ? "混合模式" : "复习模式"} · {currentIndex + 1} / {currentCards.length}
-        </span>
+        <div className="flex items-center gap-2">
+          {isCurrentReviewed && (
+            <span className="text-xs text-green-600 bg-green-50 dark:bg-green-950/30 px-2 py-0.5 rounded-full">
+              ✅ 已评分 · 可重新评分
+            </span>
+          )}
+          <span className="text-sm text-muted-foreground">
+            {mode === "mix" ? "混合模式" : "复习模式"} · {currentIndex + 1} / {currentCards.length}
+          </span>
+        </div>
       </div>
 
       {/* Progress */}
       <Progress value={progress} className="h-2" />
+
+      {/* Prev / Next navigation */}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="sm" onClick={handlePrev} disabled={!canGoPrev}>
+          <ChevronLeft className="mr-1 h-4 w-4" />
+          上一题
+        </Button>
+        <Button variant="ghost" size="sm" onClick={handleNext} disabled={!canGoNext}>
+          下一题
+          <ChevronRight className="ml-1 h-4 w-4" />
+        </Button>
+      </div>
 
       {/* Flashcard */}
       <Flashcard

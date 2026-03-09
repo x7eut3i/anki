@@ -18,4 +18,6 @@ class AIInteractionLog(SQLModel, table=True):
     error_message: str = Field(default="")
     input_preview: str = Field(default="")  # First ~200 chars of user prompt
     output_length: int = Field(default=0)
+    source: str = Field(default="")  # crawl, reading, manual, regenerate — for filtering stats
+    raw_response: str = Field(default="")  # Full raw AI response (failures only)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

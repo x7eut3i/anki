@@ -340,6 +340,7 @@ async def ai_cleanup_content(
     title: str,
     body_text: str,
     user_id: int,
+    source: str = "",
 ) -> str:
     """Clean up raw article text using AI.
 
@@ -400,11 +401,20 @@ async def ai_cleanup_content(
             config_name=config.name, tokens_used=tokens_used,
             elapsed_ms=elapsed_ms, input_preview=cleanup_prompt[:200],
             output_length=len(cleaned_result), user_id=user_id,
+            source=source,
         )
         if len(cleaned_result) > 80:
             cleaned = cleaned_result
     except Exception as e:
         logger.warning("AI content cleanup failed, using original text: %s", e)
+        log_ai_response("content_cleanup", cleanup_model, "", error=str(e))
+        log_ai_call_to_db(
+            feature="content_cleanup", model=cleanup_model,
+            config_name=config.name, status="error",
+            error_message=str(e), input_preview=cleanup_prompt[:200],
+            user_id=user_id, source=source,
+            raw_response=str(e),
+        )
 
     return cleaned
 
@@ -415,6 +425,7 @@ async def ai_analyze_article(
     title: str,
     content: str,
     user_id: int,
+    source: str = "",
 ) -> dict | None:
     """Analyze an article using AI. Returns analysis_data dict or None on failure."""
     from app.services.prompts import ARTICLE_ANALYSIS_SYSTEM_PROMPT, make_article_analysis_prompt
@@ -447,6 +458,7 @@ async def ai_analyze_article(
     max_retries = _cfg_max_retries(config)
     analysis_data = None
     ai_error_msg = ""
+    ai_raw_response = ""
 
     for attempt in range(max_retries):
         try:
@@ -470,7 +482,7 @@ async def ai_analyze_article(
                 elapsed_ms=elapsed_ms, status="ok",
                 input_preview=title[:200],
                 output_length=len(content_text),
-                user_id=user_id,
+                user_id=user_id, source=source,
             )
 
             content_text = repair_json(content_text)
@@ -478,13 +490,30 @@ async def ai_analyze_article(
             break
         except json.JSONDecodeError as e:
             ai_error_msg = f"AI返回格式错误 (attempt {attempt + 1}/{max_retries}): {e}"
+            # content_text is available when JSON parse fails after successful AI call
+            try:
+                ai_raw_response = content_text  # type: ignore[possibly-undefined]
+            except NameError:
+                ai_raw_response = str(e)
             logger.warning(ai_error_msg)
         except Exception as e:
             ai_error_msg = f"AI分析失败 (attempt {attempt + 1}/{max_retries}): {e}"
+            ai_raw_response = str(e)
             logger.warning(ai_error_msg)
 
         if attempt < max_retries - 1:
             await asyncio.sleep(2 * (attempt + 1))
+
+    # Log failure to DB if all retries exhausted
+    if analysis_data is None and ai_error_msg:
+        log_ai_response("article_analysis", model, ai_raw_response, error=ai_error_msg)
+        log_ai_call_to_db(
+            feature="article_analysis", model=model,
+            config_name=config.name, status="error",
+            error_message=ai_error_msg, input_preview=title[:200],
+            user_id=user_id, source=source,
+            raw_response=ai_raw_response,
+        )
 
     return analysis_data
 
@@ -496,6 +525,7 @@ async def ai_generate_cards(
     content: str,
     source_url: str,
     user_id: int,
+    source: str = "",
 ) -> tuple[int, list[dict]]:
     """Generate flashcards from article content using AI.
 
@@ -544,6 +574,7 @@ async def ai_generate_cards(
     max_retries = _cfg_max_retries(config)
     content_text = None
     last_error = None
+    last_raw_response = ""
 
     for attempt in range(max_retries):
         try:
@@ -567,7 +598,7 @@ async def ai_generate_cards(
                 elapsed_ms=elapsed_ms,
                 status="ok", input_preview=title[:200],
                 output_length=len(content_text),
-                user_id=user_id,
+                user_id=user_id, source=source,
             )
             
             # Parse JSON with repair
@@ -587,12 +618,21 @@ async def ai_generate_cards(
             break
         except Exception as e:
             last_error = str(e)
+            last_raw_response = content_text if content_text else str(e)
             logger.warning("card_generation attempt %d/%d failed: %s", attempt + 1, max_retries, e)
         if attempt < max_retries - 1:
             await asyncio.sleep(2 * (attempt + 1))
 
     if last_error or content_text is None:
         logger.error("Card generation failed after retries: %s", last_error)
+        log_ai_response("card_generation", model, last_raw_response, error=str(last_error))
+        log_ai_call_to_db(
+            feature="card_generation", model=model,
+            config_name=config.name, status="error",
+            error_message=str(last_error), input_preview=title[:200],
+            user_id=user_id, source=source,
+            raw_response=last_raw_response,
+        )
         return 0, []
 
     # Create cards with dedup

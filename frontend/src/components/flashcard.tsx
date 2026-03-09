@@ -26,6 +26,7 @@ interface FlashcardProps {
   showRatings?: boolean;
   forceType?: "qa" | "choice";  // Override question type display regardless of distractors
   tagPanel?: React.ReactNode;  // Optional tag management panel to render inside
+  readOnly?: boolean;  // If true, show answer but hide rating buttons (browsing history)
 }
 
 const RATING_LABELS = [
@@ -55,6 +56,7 @@ export default function Flashcard({
   showRatings = true,
   forceType,
   tagPanel,
+  readOnly = false,
 }: FlashcardProps) {
   const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
 
@@ -79,7 +81,7 @@ export default function Flashcard({
     const meta = parseJson<Record<string, any> | null>(card.meta_info, null);
     const alts = meta?.alternate_questions;
     if (alts?.length) {
-      const candidates = alts.filter((q: any) => q.question && q.answer);
+      const candidates = alts.filter((q: any) => q.question && (q.answer || q.correct_answer));
       if (candidates.length) {
         // Pool: [null (= use original front/back), ...candidates]
         const pool: (any | null)[] = [null, ...candidates];
@@ -92,18 +94,19 @@ export default function Flashcard({
 
   // Effective front/back (may be overridden by alternate question)
   const effectiveFront = altQuestion?.question || card.front;
-  const effectiveBack = altQuestion?.answer || card.back;
+  const effectiveBack = altQuestion?.answer || altQuestion?.correct_answer || card.back;
 
   // Parse distractors
   const distractors: string[] = React.useMemo(() => {
     if (altQuestion) {
+      const altAnswer = altQuestion.answer || altQuestion.correct_answer;
       // New format: distractors stored directly
       if (altQuestion.distractors?.length) {
         return altQuestion.distractors;
       }
       // Legacy format: extract from choices by removing answer
       if (altQuestion.choices) {
-        return altQuestion.choices.filter((c: string) => c !== altQuestion.answer);
+        return altQuestion.choices.filter((c: string) => c !== altAnswer);
       }
     }
     return parseJson(card.distractors, []);
@@ -148,18 +151,28 @@ export default function Flashcard({
         e.preventDefault();
         onToggleAnswer();
       }
-      if (onRate && ["1", "2", "3", "4"].includes(e.key)) {
+      if (onRate && !readOnly && ["1", "2", "3", "4"].includes(e.key)) {
         onRate(parseInt(e.key));
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [showAnswer, onRate, onToggleAnswer]);
+  }, [showAnswer, onRate, onToggleAnswer, readOnly]);
+
+  // Auto-show answer in readOnly mode (reviewing previously rated card)
+  React.useEffect(() => {
+    if (readOnly && !showAnswer) {
+      onToggleAnswer();
+    }
+  }, [readOnly, card.id]);
 
   return (
     <div className="w-full max-w-2xl mx-auto">
       {/* Type & category & tag badges */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
+        {readOnly && (
+          <Badge variant="outline" className="text-xs border-green-500 text-green-600">✅ 已回答</Badge>
+        )}
         {card.category_name && (
           <Badge variant="secondary">{card.category_name}</Badge>
         )}
@@ -245,10 +258,10 @@ export default function Flashcard({
               正确答案
             </div>
             <div className="text-lg font-medium text-green-900 dark:text-green-100">{effectiveBack}</div>
-            {/* Pinyin from meta_info (for idiom cards) */}
-            {(metaInfo?.pinyin || metaInfo?.meta_info?.pinyin) && (
+            {/* Pinyin from meta_info (for idiom cards) — consolidated from all sources */}
+            {(metaInfo?.pinyin || metaInfo?.meta_info?.pinyin || metaInfo?.facts?.pinyin) && (
               <div className="mt-1.5 text-sm tracking-wider">
-                🔤 拼音：{metaInfo?.pinyin || metaInfo?.meta_info?.pinyin}
+                🔤 拼音：{metaInfo?.pinyin || metaInfo?.meta_info?.pinyin || metaInfo?.facts?.pinyin}
               </div>
             )}
             {metaInfo?.example_sentence && (
@@ -390,7 +403,7 @@ function MetaInfoPanel({ meta }: { meta: Record<string, any> }) {
   const hasKnowledge = knowledge && Object.values(knowledge).some((v) =>
     Array.isArray(v) ? v.length > 0 : !!v
   );
-  const hasFacts = facts && Object.keys(facts).length > 0;
+  const hasFacts = facts && Object.keys(facts).filter(k => k !== "pinyin").length > 0;
 
   if (!hasKnowledge && !hasFacts && !examFocus) return null;
 
@@ -428,12 +441,12 @@ function MetaInfoPanel({ meta }: { meta: Record<string, any> }) {
         </div>
       )}
 
-      {/* Facts section — with friendly labels, icons, colors */}
+      {/* Facts section — with friendly labels, icons, colors (pinyin shown separately) */}
       {hasFacts && (
         <div className="bg-amber-50/50 dark:bg-amber-950/20 rounded-lg p-3">
           <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-2">📋 关键信息</div>
           <div className="grid gap-1.5 text-sm">
-            {Object.entries(facts!).map(([k, v]) => {
+            {Object.entries(facts!).filter(([k]) => k !== "pinyin").map(([k, v]) => {
               const { label, icon, color } = getFactLabel(k);
               return (
                 <div key={k} className="flex items-start gap-1.5">

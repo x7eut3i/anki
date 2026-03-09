@@ -64,6 +64,9 @@ def _migrate_add_columns():
         ("users", "study_custom_ratio", "INTEGER DEFAULT 60"),
         ("study_sessions", "question_mode", "TEXT DEFAULT 'custom'"),
         ("study_sessions", "custom_ratio", "INTEGER DEFAULT 60"),
+        ("ai_interaction_logs", "source", "TEXT DEFAULT ''"),
+        ("ai_interaction_logs", "raw_response", "TEXT DEFAULT ''"),
+        ("study_sessions", "all_card_ids", "TEXT DEFAULT '[]'"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

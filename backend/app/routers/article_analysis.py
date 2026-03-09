@@ -563,6 +563,7 @@ async def _bg_repair_articles_async(
                             session, config,
                             title=article.title, content=article.content,
                             user_id=user_id,
+                            source="reading",
                         )
 
                         if analysis_data:
@@ -584,6 +585,7 @@ async def _bg_repair_articles_async(
                                     content=article.content,
                                     source_url=article.source_url or "",
                                     user_id=user_id,
+                                    source="reading",
                                 )
                                 if cards_created > 0:
                                     async with state_lock:
@@ -601,6 +603,7 @@ async def _bg_repair_articles_async(
                             content=article.content,
                             source_url=article.source_url or "",
                             user_id=user_id,
+                            source="reading",
                         )
                         if cards_created > 0:
                             async with state_lock:
@@ -740,6 +743,13 @@ async def batch_reanalyze(
             success += 1
         except Exception as e:
             logger.error("Batch reanalyze failed for %d: %s", aid, e)
+            log_ai_call_to_db(
+                feature="batch_reanalyze", model=model,
+                config_name=config.name, status="error",
+                error_message=str(e)[:500],
+                input_preview=(item.title or "")[:200],
+                user_id=current_user.id,
+            )
             failed += 1
 
     return {"success": success, "failed": failed, "total": len(data.ids)}
@@ -1070,6 +1080,7 @@ async def _bg_analyze_article_async(
                 session, config,
                 title=title, content=content,
                 user_id=user_id,
+                source="reading",
             )
 
             ai_error_msg = "" if analysis_data else "AI分析失败"
@@ -1114,6 +1125,7 @@ async def _bg_analyze_article_async(
                         content=content,
                         source_url=source_url or "",
                         user_id=user_id,
+                        source="reading",
                     )
                 except Exception as e:
                     logger.warning("Card generation failed in background: %s", e)
@@ -1195,6 +1207,7 @@ async def fetch_url_content(
             from app.services.ai_pipeline import ai_cleanup_content
             content = await ai_cleanup_content(
                 config, title, content, current_user.id,
+                source="reading",
             )
     except Exception as e:
         logger.warning("AI content cleanup skipped in fetch_url_content: %s", e)
@@ -1332,9 +1345,23 @@ async def create_card_from_selection(
 
     except json.JSONDecodeError as e:
         logger.error("AI response JSON parse error: %s", e)
+        log_ai_call_to_db(
+            feature="card_from_selection", model=model,
+            config_name=config.name, status="error",
+            error_message=f"JSON parse error: {str(e)[:400]}",
+            input_preview=data.selected_text[:200],
+            user_id=current_user.id,
+        )
         raise HTTPException(status_code=500, detail="AI返回格式错误，请重试")
     except Exception as e:
         logger.error("AI card creation failed: %s", e)
+        log_ai_call_to_db(
+            feature="card_from_selection", model=model,
+            config_name=config.name, status="error",
+            error_message=str(e)[:500],
+            input_preview=data.selected_text[:200],
+            user_id=current_user.id,
+        )
         raise HTTPException(status_code=500, detail=f"AI生成卡片失败: {str(e)}")
 
     # Resolve category

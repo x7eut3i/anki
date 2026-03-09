@@ -495,6 +495,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             body_text = await ai_cleanup_content(
                                 config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
 
                             if _cancel_requested:
@@ -507,6 +508,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             analysis_data = await ai_analyze_article(
                                 session, config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
                             if analysis_data is None:
                                 async with state_lock:
@@ -575,6 +577,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                     session, config, title, body_text,
                                     source_url=url,
                                     user_id=admin_user.id if admin_user else 1,
+                                    source="crawl",
                                 )
                                 async with state_lock:
                                     total_cards += cards_created_this
@@ -859,6 +862,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             body_text = await ai_cleanup_content(
                                 config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
 
                             if _cancel_requested:
@@ -870,6 +874,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             analysis_data = await ai_analyze_article(
                                 session, config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
                             if analysis_data is None:
                                 async with state_lock:
@@ -935,6 +940,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                     session, config, title, body_text,
                                     source_url=url,
                                     user_id=admin_user.id if admin_user else 1,
+                                    source="crawl",
                                 )
                             async with state_lock:
                                 total_cards += cards_created_this
@@ -1215,6 +1221,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             body_text = await ai_cleanup_content(
                                 config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
 
                             if _cancel_requested:
@@ -1226,6 +1233,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             analysis_data = await ai_analyze_article(
                                 session, config, title, body_text,
                                 user_id=admin_user.id if admin_user else 1,
+                                source="crawl",
                             )
                             if analysis_data is None:
                                 async with state_lock:
@@ -1291,6 +1299,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                     session, config, title, body_text,
                                     source_url=url,
                                     user_id=admin_user.id if admin_user else 1,
+                                    source="crawl",
                                 )
                             async with state_lock:
                                 total_cards += cards_created_this

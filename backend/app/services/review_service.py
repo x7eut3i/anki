@@ -329,6 +329,7 @@ class ReviewService:
             deck_id=deck_id,
             total_cards=len(card_ids),
             remaining_card_ids=json.dumps(card_ids),
+            all_card_ids=json.dumps(card_ids),
             quiz_time_limit=quiz_time_limit,
             question_mode=question_mode,
             custom_ratio=custom_ratio,
@@ -667,6 +668,30 @@ class ReviewService:
             })
         return list(reversed(daily))
 
+    def get_cards_by_ids(self, card_ids: list[int]) -> list[dict]:
+        """Fetch cards by IDs with their progress info (no SRS filtering).
+        Used for session resume with history — returns reviewed + unreviewed cards.
+        """
+        if not card_ids:
+            return []
+
+        rows = self.session.exec(
+            select(Card, UserCardProgress)
+            .outerjoin(
+                UserCardProgress,
+                (UserCardProgress.card_id == Card.id)
+                & (UserCardProgress.user_id == self.user_id),
+            )
+            .where(col(Card.id).in_(card_ids))
+        ).all()
+
+        cards = [self._merge_card_progress(card, progress) for card, progress in rows]
+
+        # Maintain original order from card_ids
+        id_order = {cid: i for i, cid in enumerate(card_ids)}
+        cards.sort(key=lambda c: id_order.get(c["id"], 999999))
+        return cards
+
     def _merge_card_progress(self, card: Card, progress: UserCardProgress | None) -> dict:
         """Merge a Card and its optional UserCardProgress into a flat dict
         compatible with CardResponse."""
@@ -717,3 +742,33 @@ class ReviewService:
             "is_suspended": progress.is_suspended if progress else False,
         }
         return d
+
+    # ── Reset progress ────────────────────────────────────────────────
+
+    def reset_all(self) -> dict:
+        """Reset ALL study progress. All cards return to NEW state."""
+        # Count before deleting
+        progress_list = self.session.exec(
+            select(UserCardProgress).where(UserCardProgress.user_id == self.user_id)
+        ).all()
+        review_logs = self.session.exec(
+            select(ReviewLog).where(ReviewLog.user_id == self.user_id)
+        ).all()
+
+        progress_deleted = len(progress_list)
+        reviews_deleted = len(review_logs)
+
+        for p in progress_list:
+            self.session.delete(p)
+        for r in review_logs:
+            self.session.delete(r)
+
+        # Also clean up all study sessions
+        sessions = self.session.exec(
+            select(StudySession).where(StudySession.user_id == self.user_id)
+        ).all()
+        for s in sessions:
+            self.session.delete(s)
+
+        self.session.commit()
+        return {"progress_deleted": progress_deleted, "reviews_deleted": reviews_deleted}

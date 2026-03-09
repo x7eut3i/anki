@@ -48,29 +48,14 @@ def log_ai_request(
     max_tokens: int = 1000,
     extra: dict | None = None,
 ) -> None:
-    """Log an outgoing AI API request."""
+    """Log an outgoing AI API request (summary only — no full body)."""
     try:
-        # Log full message content (no truncation for debugging)
-        logged_messages = []
-        for msg in messages:
-            logged_msg = {**msg}
-            logged_messages.append(logged_msg)
-
-        entry = {
-            "direction": "REQUEST",
-            "feature": feature,
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "message_count": len(messages),
-            "messages": logged_messages,
-        }
-        if extra:
-            entry["extra"] = extra
-
+        # Only log a concise summary line; full message bodies are omitted to
+        # keep the log file slim.  On failure the response logger will record
+        # the full payload.
+        total_chars = sum(len(m.get("content", "")) for m in messages)
         ai_logger.info(f"[{feature}] REQUEST | model={model} | msgs={len(messages)} | "
-                       f"temp={temperature} | max_tokens={max_tokens}")
-        ai_logger.debug(json.dumps(entry, ensure_ascii=False, indent=2))
+                       f"temp={temperature} | max_tokens={max_tokens} | input_chars={total_chars}")
     except Exception as e:
         ai_logger.error(f"Failed to log AI request: {e}")
 
@@ -83,25 +68,31 @@ def log_ai_response(
     elapsed_ms: int = 0,
     error: str | None = None,
 ) -> None:
-    """Log an incoming AI API response."""
-    try:
-        entry = {
-            "direction": "RESPONSE",
-            "feature": feature,
-            "model": model,
-            "tokens_used": tokens_used,
-            "elapsed_ms": elapsed_ms,
-            "content_length": len(content) if content else 0,
-            "content": content or "",
-        }
-        if error:
-            entry["error"] = error
+    """Log an incoming AI API response.
 
+    Full response body is only logged at DEBUG level when there is an error.
+    Success responses only get a concise INFO summary line.
+    """
+    try:
         status = "ERROR" if error else "OK"
         ai_logger.info(f"[{feature}] RESPONSE {status} | model={model} | "
                        f"tokens={tokens_used} | {elapsed_ms}ms | "
-                       f"content_len={len(content) if content else 0}")
-        ai_logger.debug(json.dumps(entry, ensure_ascii=False, indent=2))
+                       f"content_len={len(content) if content else 0}"
+                       + (f" | error={error}" if error else ""))
+
+        # Only dump full response body on failure for post-mortem debugging
+        if error:
+            entry = {
+                "direction": "RESPONSE_ERROR",
+                "feature": feature,
+                "model": model,
+                "tokens_used": tokens_used,
+                "elapsed_ms": elapsed_ms,
+                "error": error,
+                "content_length": len(content) if content else 0,
+                "content": _truncate(content) if content else "",
+            }
+            ai_logger.debug(json.dumps(entry, ensure_ascii=False, indent=2))
     except Exception as e:
         ai_logger.error(f"Failed to log AI response: {e}")
 
@@ -117,8 +108,16 @@ def log_ai_call_to_db(
     input_preview: str = "",
     output_length: int = 0,
     user_id: int | None = None,
+    source: str = "",
+    raw_response: str = "",
 ) -> None:
-    """Log an AI interaction to the database for reliable statistics."""
+    """Log an AI interaction to the database for reliable statistics.
+
+    Args:
+        source: Caller context, e.g. "crawl", "reading", "manual", "regenerate".
+                Used to filter crawl failures out of AI stats.
+        raw_response: Full raw AI response body (recorded only on failures).
+    """
     try:
         from app.database import engine as db_engine
         from sqlmodel import Session as SyncSession
@@ -135,6 +134,8 @@ def log_ai_call_to_db(
             error_message=error_message[:500] if error_message else "",
             input_preview=input_preview[:200] if input_preview else "",
             output_length=output_length,
+            source=source,
+            raw_response=raw_response[:10000] if raw_response else "",
         )
         with SyncSession(db_engine) as session:
             session.add(log_entry)

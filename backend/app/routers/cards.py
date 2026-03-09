@@ -1,6 +1,7 @@
 import logging
 import json
 import asyncio
+import time as _time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,6 +16,7 @@ from app.models.deck import Deck
 from app.models.user import User
 from app.models.user_card_progress import UserCardProgress
 from app.models.ai_config import AIConfig
+from app.services.ai_logger import log_ai_call_to_db
 from app.schemas.card import (
     CardCreate,
     CardUpdate,
@@ -407,12 +409,15 @@ async def regenerate_questions(
     }
 
     try:
+        _t0 = _time.time()
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
+        _elapsed = int((_time.time() - _t0) * 1000)
 
         content = data["choices"][0]["message"]["content"]
+        _tokens = data.get("usage", {}).get("total_tokens", 0)
         questions = robust_json_parse(content)
 
         if not isinstance(questions, list):
@@ -435,13 +440,35 @@ async def regenerate_questions(
         if not validated:
             raise ValueError("No valid questions generated")
 
+        log_ai_call_to_db(
+            feature="regenerate_questions", model=model,
+            config_name=config.name, tokens_used=_tokens,
+            elapsed_ms=_elapsed, status="ok",
+            input_preview=card.front[:200],
+            output_length=len(content),
+            user_id=current_user.id,
+        )
         return {"questions": validated}
 
     except httpx.HTTPStatusError as e:
         logger.error("AI call failed for regenerate-questions: HTTP %d", e.response.status_code)
+        log_ai_call_to_db(
+            feature="regenerate_questions", model=model,
+            config_name=config.name, status="error",
+            error_message=f"HTTP {e.response.status_code}",
+            input_preview=card.front[:200],
+            user_id=current_user.id,
+        )
         raise HTTPException(
             status_code=502, detail=f"AI服务调用失败: HTTP {e.response.status_code}"
         )
     except Exception as e:
         logger.error("regenerate-questions failed: %s", e)
+        log_ai_call_to_db(
+            feature="regenerate_questions", model=model,
+            config_name=config.name, status="error",
+            error_message=str(e)[:500],
+            input_preview=card.front[:200],
+            user_id=current_user.id,
+        )
         raise HTTPException(status_code=500, detail=f"生成失败: {str(e)[:200]}")

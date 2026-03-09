@@ -39,6 +39,7 @@ class DueCardsRequest(BaseModel):
     tag_ids: list[int] | None = None  # Filter by tags
     exclude_ai_decks: bool = False  # Exclude cards in AI-* decks
     limit: int = Field(default=50, ge=1, le=200)
+    card_ids: list[int] | None = None  # If set, return these cards directly (bypass SRS)
 
 
 class DueCardsResponse(BaseModel):
@@ -78,6 +79,7 @@ class StudySessionResponse(BaseModel):
     finished_at: datetime | None
     is_completed: bool
     remaining_card_ids: str
+    all_card_ids: str
     question_mode: str
     custom_ratio: int
 

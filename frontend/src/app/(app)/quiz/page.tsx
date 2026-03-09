@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isHiddenTag, ArticleSourceLink } from "@/components/card-detail";
 import Link from "next/link";
+import { useSwipe } from "@/hooks/use-swipe";
 
 type QuizQuestion = {
   question_id: number;
@@ -100,6 +101,12 @@ export default function QuizPage() {
       setLoading(false);
     }
   };
+
+  // Swipe hook MUST be called unconditionally (Rules of Hooks — before any early return)
+  const swipeRef = useSwipe<HTMLDivElement>({
+    onSwipeLeft: () => { if (quizStarted && currentQ < questions.length - 1) setCurrentQ((c) => c + 1); },
+    onSwipeRight: () => { if (quizStarted && currentQ > 0) setCurrentQ((c) => c - 1); },
+  });
 
   // Config screen
   if (!quizStarted) {
@@ -281,7 +288,7 @@ export default function QuizPage() {
   const progress = ((currentQ + 1) / questions.length) * 100;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-4">
+    <div className="max-w-2xl mx-auto space-y-4" ref={swipeRef}>
       {/* Progress */}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>第 {currentQ + 1} / {questions.length} 题</span>

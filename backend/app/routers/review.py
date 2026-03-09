@@ -39,6 +39,15 @@ def get_due_cards(
     data: DueCardsRequest,
     service: ReviewService = Depends(_get_review_service),
 ):
+    # If card_ids provided, return those cards directly (for session resume with history)
+    if data.card_ids:
+        cards = service.get_cards_by_ids(data.card_ids)
+        from app.schemas.card import CardResponse
+        return {
+            "cards": [CardResponse(**c) for c in cards],
+            "total_due": 0, "new_count": 0,
+            "review_count": 0, "relearning_count": 0,
+        }
     result = service.get_due_cards(
         category_ids=data.category_ids,
         deck_id=data.deck_id,
@@ -158,3 +167,16 @@ def get_stats(
             pass
     stats = service.get_study_stats(tz=user_tz)
     return StudyStatsResponse(**stats)
+
+
+@router.post("/reset/all")
+def reset_all(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Reset ALL study progress. All cards return to NEW state."""
+    service = ReviewService(session=session, user_id=current_user.id)
+    result = service.reset_all()
+    logger.info("User %d reset ALL progress: %d progress deleted, %d reviews deleted",
+                current_user.id, result["progress_deleted"], result["reviews_deleted"])
+    return result

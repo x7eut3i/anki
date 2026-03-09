@@ -27,6 +27,8 @@ class StudySession(SQLModel, table=True):
 
     # Remaining card IDs (JSON array) for session recovery
     remaining_card_ids: str = Field(default="[]")
+    # All card IDs originally in this session (JSON array) — for resume with history
+    all_card_ids: str = Field(default="[]")
 
     # Question type settings for this session
     question_mode: str = Field(default="custom")  # all_qa, all_choice, custom

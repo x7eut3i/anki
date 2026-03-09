@@ -305,6 +305,7 @@ async def test_source(
                         first_body = await ai_cleanup_content(
                             ai_config, art["title"], first_body,
                             current_user.id,
+                            source="crawl",
                         )
                 except Exception as ai_err:
                     logger.warning("AI cleanup skipped in test_source: %s", ai_err)

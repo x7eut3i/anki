@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/lib/store";
-import { auth } from "@/lib/api";
+import { auth, review } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Settings, User, Shield, LogOut, Globe, KeyRound } from "lucide-react";
+import { Settings, User, Shield, LogOut, Globe, KeyRound, RotateCcw } from "lucide-react";
 
 const TIMEZONE_OPTIONS = [
   { value: "Asia/Shanghai", label: "中国标准时间 (UTC+8)" },
@@ -44,6 +44,9 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
   const [pwMsg, setPwMsg] = useState<string | null>(null);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState<"all" | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -289,6 +292,73 @@ export default function SettingsPage() {
           {saveMsg && (
             <p className={`text-sm ${saveMsg === "设置已保存" ? "text-green-600" : "text-red-500"}`}>
               {saveMsg}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Reset Study Progress */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <RotateCcw className="h-5 w-5" />
+            重置学习进度
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            重置后所有卡片将回到未学习状态，所有复习记录将被删除，此操作不可撤销。
+          </p>
+          {!confirmReset ? (
+            <Button
+              variant="destructive"
+              onClick={() => setConfirmReset("all")}
+              disabled={resetting}
+            >
+              <RotateCcw className="mr-2 h-4 w-4" />
+              重置所有进度
+            </Button>
+          ) : (
+            <div className="p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 space-y-3">
+              <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                ⚠️ 确定要重置所有学习进度吗？所有卡片将回到全新未学习状态，所有复习记录将被删除。
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={resetting}
+                  onClick={async () => {
+                    if (!token) return;
+                    setResetting(true);
+                    setResetMsg(null);
+                    try {
+                      const result = await review.resetAll(token);
+                      setResetMsg(`已重置：${result.progress_deleted} 张卡片进度清除，${result.reviews_deleted} 条记录删除`);
+                    } catch {
+                      setResetMsg("重置失败");
+                    } finally {
+                      setResetting(false);
+                      setConfirmReset(null);
+                    }
+                  }}
+                >
+                  {resetting ? "处理中..." : "确认重置"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmReset(null)}
+                  disabled={resetting}
+                >
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+          {resetMsg && (
+            <p className={`text-sm ${resetMsg.startsWith("已重置") ? "text-green-600" : "text-red-500"}`}>
+              {resetMsg}
             </p>
           )}
         </CardContent>

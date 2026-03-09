@@ -196,6 +196,9 @@ export const review = {
 
   stats: (token: string, tz?: string) =>
     request<any>(`/api/review/stats${tz ? `?tz=${encodeURIComponent(tz)}` : ''}`, { token }),
+
+  resetAll: (token: string) =>
+    request<any>("/api/review/reset/all", { method: "POST", token }),
 };
 
 // ---------------------------------------------------------------------------

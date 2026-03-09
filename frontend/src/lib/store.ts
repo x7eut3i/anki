@@ -41,8 +41,13 @@ interface StudyState {
   showAnswer: boolean;
   sessionId: number | null;
   mode: "review" | "mix" | "quiz";
+  reviewedIndices: Set<number>;  // tracks which card indices have been rated
   setCards: (cards: any[]) => void;
+  initSession: (cards: any[], startIndex: number, reviewed: Set<number>) => void;
   nextCard: () => void;
+  prevCard: () => void;
+  goToCard: (index: number) => void;
+  markReviewed: (index: number) => void;
   toggleAnswer: () => void;
   setSession: (id: number, mode: "review" | "mix" | "quiz") => void;
   updateCurrentCard: (patch: Partial<any>) => void;
@@ -55,12 +60,35 @@ export const useStudyStore = create<StudyState>((set) => ({
   showAnswer: false,
   sessionId: null,
   mode: "review",
-  setCards: (cards) => set({ currentCards: cards, currentIndex: 0, showAnswer: false }),
+  reviewedIndices: new Set(),
+  setCards: (cards) => set({ currentCards: cards, currentIndex: 0, showAnswer: false, reviewedIndices: new Set() }),
+  initSession: (cards, startIndex, reviewed) => set({
+    currentCards: cards,
+    currentIndex: startIndex,
+    showAnswer: false,
+    reviewedIndices: reviewed,
+  }),
   nextCard: () =>
     set((s) => ({
       currentIndex: Math.min(s.currentIndex + 1, s.currentCards.length - 1),
       showAnswer: false,
     })),
+  prevCard: () =>
+    set((s) => ({
+      currentIndex: Math.max(s.currentIndex - 1, 0),
+      showAnswer: false,
+    })),
+  goToCard: (index) =>
+    set((s) => ({
+      currentIndex: Math.max(0, Math.min(index, s.currentCards.length - 1)),
+      showAnswer: false,
+    })),
+  markReviewed: (index) =>
+    set((s) => {
+      const newSet = new Set(s.reviewedIndices);
+      newSet.add(index);
+      return { reviewedIndices: newSet };
+    }),
   toggleAnswer: () => set((s) => ({ showAnswer: !s.showAnswer })),
   setSession: (id, mode) => set({ sessionId: id, mode }),
   updateCurrentCard: (patch) =>
@@ -78,5 +106,6 @@ export const useStudyStore = create<StudyState>((set) => ({
       showAnswer: false,
       sessionId: null,
       mode: "review",
+      reviewedIndices: new Set(),
     }),
 }));
