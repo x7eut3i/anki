@@ -62,6 +62,8 @@ class StudySessionCreate(BaseModel):
     exclude_ai_decks: bool = False  # Exclude cards in AI-* decks
     card_limit: int = Field(default=50, ge=1, le=500)
     quiz_time_limit: int = Field(default=0, ge=0)  # seconds
+    question_mode: str = "custom"  # all_qa, all_choice, custom
+    custom_ratio: int = 60  # QA percentage (0-100)
 
 
 class StudySessionResponse(BaseModel):
@@ -76,6 +78,8 @@ class StudySessionResponse(BaseModel):
     finished_at: datetime | None
     is_completed: bool
     remaining_card_ids: str
+    question_mode: str
+    custom_ratio: int
 
     model_config = {"from_attributes": True}
 
