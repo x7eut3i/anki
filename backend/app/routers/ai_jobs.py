@@ -125,22 +125,31 @@ def update_job_status(
     result_json: str = "",
     error_message: str = "",
 ):
-    """Update job status. Creates its own session since this runs in background."""
-    from sqlmodel import Session as SyncSession
-    with SyncSession(engine) as session:
-        job = session.get(AIJob, job_id)
-        if not job:
-            return
-        job.status = status
-        job.progress = progress
-        if status == "running" and not job.started_at:
-            job.started_at = datetime.now(timezone.utc)
-        if status in ("completed", "failed"):
-            job.completed_at = datetime.now(timezone.utc)
-            job.progress = 100 if status == "completed" else job.progress
-        if result_json:
-            job.result_json = result_json
-        if error_message:
-            job.error_message = error_message[:2000]
-        session.add(job)
-        session.commit()
+    """Update job status. Creates its own session since this runs in background.
+
+    Wrapped in try/except because the caller's main session may hold a
+    SHARED lock that blocks this writer (even with WAL + busy_timeout the
+    write can occasionally time-out under heavy load).  A logging failure
+    must never crash the background task.
+    """
+    try:
+        from sqlmodel import Session as SyncSession
+        with SyncSession(engine) as session:
+            job = session.get(AIJob, job_id)
+            if not job:
+                return
+            job.status = status
+            job.progress = progress
+            if status == "running" and not job.started_at:
+                job.started_at = datetime.now(timezone.utc)
+            if status in ("completed", "failed"):
+                job.completed_at = datetime.now(timezone.utc)
+                job.progress = 100 if status == "completed" else job.progress
+            if result_json:
+                job.result_json = result_json
+            if error_message:
+                job.error_message = error_message[:2000]
+            session.add(job)
+            session.commit()
+    except Exception as exc:
+        logger.warning("update_job_status(%s, %s) failed: %s", job_id, status, exc)

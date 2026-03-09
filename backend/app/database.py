@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 from sqlmodel import SQLModel, Session, create_engine
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
@@ -36,6 +36,32 @@ engine = create_engine(
     # tasks hold connections during long AI HTTP calls.
     poolclass=NullPool,
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, connection_record):
+    """Configure every new SQLite connection for safe concurrency.
+
+    WAL (Write-Ahead Logging):
+      - Readers never block writers and writers never block readers.
+      - Without WAL (default DELETE journal mode), a SELECT acquires a SHARED
+        lock that prevents *any* writer from committing until the reader's
+        transaction ends.  Background tasks (complete_cards, smart_import …)
+        open a long-lived Session A for reading, then call update_job_status()
+        which opens Session B and tries to COMMIT — blocked by Session A's
+        SHARED lock → "database is locked" after 5 s.
+      - WAL mode is persistent (survives restarts); setting it on every
+        connection is harmless.
+
+    busy_timeout 30 s:
+      - Default is only 5 s.  Long AI HTTP calls (up to 120 s × 9 retries)
+        mean a background task's session can legitimately hold a lock for a
+        while.  30 s gives enough room for concurrent writers to wait.
+    """
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
 
 
 def create_db_and_tables():

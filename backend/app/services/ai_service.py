@@ -172,7 +172,7 @@ class AIService:
 
         # Log usage
         tokens = result.get("usage", {}).get("total_tokens", 0)
-        content = result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"] or ""
 
         # Log response
         log_ai_response(feature, cfg.model, content, tokens, elapsed_ms)
@@ -187,13 +187,23 @@ class AIService:
             user_id=self.user_id,
         )
 
-        usage_log = AIUsageLog(
-            user_id=self.user_id,
-            feature=feature,
-            tokens_used=tokens,
-        )
-        self.session.add(usage_log)
-        self.session.commit()
+        # Write usage log with a *separate* session so we don't commit the
+        # caller's session as a side-effect.  Background tasks keep their
+        # main session open for a long time; an unexpected mid-task commit
+        # can corrupt the session's identity-map and cause subtle bugs or
+        # SQLite locking issues.
+        try:
+            from app.database import engine as _db_engine
+            from sqlmodel import Session as _SyncSession
+            with _SyncSession(_db_engine) as _log_sess:
+                _log_sess.add(AIUsageLog(
+                    user_id=self.user_id,
+                    feature=feature,
+                    tokens_used=tokens,
+                ))
+                _log_sess.commit()
+        except Exception:
+            pass  # Don't fail the AI call just because logging failed
 
         return {"content": content, "tokens_used": tokens, "elapsed_ms": elapsed_ms}
 
