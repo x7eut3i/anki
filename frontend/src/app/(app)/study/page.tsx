@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuthStore, useStudyStore } from "@/lib/store";
-import { review } from "@/lib/api";
+import { review, auth } from "@/lib/api";
 import Flashcard from "@/components/flashcard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -44,23 +44,33 @@ export default function StudyPage() {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [cardStartTime, setCardStartTime] = useState<number>(Date.now());
 
-  // 60/40 Q&A/choice ratio: pre-compute for each card
+  // Question type config (persisted on user profile)
+  const [showTypeConfig, setShowTypeConfig] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [questionMode, setQuestionMode] = useState<"all_choice" | "all_qa" | "custom">("custom");
+  const [customRatio, setCustomRatio] = useState<number>(60);
+
+  // Q&A/choice ratio: pre-compute for each card
   const [forceTypeMap, setForceTypeMap] = useState<Record<number, "qa" | "choice">>({});
 
-  // Compute 60% Q&A / 40% Choice ratio for review & mix modes
-  const computeForceTypes = useCallback((cards: any[]) => {
+  // Compute force types based on user's question mode setting
+  const computeForceTypes = useCallback((cards: any[], qMode?: string, qRatio?: number) => {
     const map: Record<number, "qa" | "choice"> = {};
+    const mode_ = qMode || questionMode;
+    const ratio = (qRatio ?? customRatio) / 100;
     cards.forEach((c) => {
-      // 实词辨析 cards: always choice (selection-based by nature)
       if (c.category_name === "实词辨析") {
         map[c.id] = "choice";
+      } else if (mode_ === "all_qa") {
+        map[c.id] = "qa";
+      } else if (mode_ === "all_choice") {
+        map[c.id] = "choice";
       } else {
-        // In review/mix mode, 60% Q&A, 40% choice
-        map[c.id] = Math.random() < 0.6 ? "qa" : "choice";
+        map[c.id] = Math.random() < ratio ? "qa" : "choice";
       }
     });
     setForceTypeMap(map);
-  }, []);
+  }, [questionMode, customRatio]);
 
   // Check for an unfinished session first (exclude quiz sessions)
   const checkActiveSession = useCallback(async () => {
@@ -164,10 +174,35 @@ export default function StudyPage() {
     }
   }, [token, pendingSession, setCards, loadCards]);
 
+  // Save settings to user profile and start studying
+  const startWithConfig = useCallback(async () => {
+    if (token) {
+      try {
+        const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+        await fetch(`${API_BASE}/api/auth/me`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ study_question_mode: questionMode, study_custom_ratio: customRatio }),
+        });
+      } catch { /* non-critical */ }
+    }
+    setShowTypeConfig(false);
+    await loadCards();
+  }, [questionMode, customRatio, loadCards, token]);
+
   useEffect(() => {
     const init = async () => {
       const wantsResume = params.get("resume") === "1";
-      const hasSpecificTarget = categoryIds.length > 0 || !!deckId || deckIds.length > 0 || mode === "mix";
+
+      // Load user study preferences from server
+      if (token && !settingsLoaded) {
+        try {
+          const me = await auth.me(token);
+          if (me.study_question_mode) setQuestionMode(me.study_question_mode);
+          if (me.study_custom_ratio != null) setCustomRatio(me.study_custom_ratio);
+          setSettingsLoaded(true);
+        } catch { /* use defaults */ }
+      }
 
       if (wantsResume) {
         // Coming from dashboard "继续学习" — auto-resume without showing prompt
@@ -184,6 +219,7 @@ export default function StudyPage() {
               const resumeCards = (data.cards || []).filter((c: any) => remainingSet.has(c.id));
               if (resumeCards.length > 0) {
                 setCards(resumeCards);
+                computeForceTypes(resumeCards);
                 setReviewedCount(session.cards_reviewed || 0);
                 setLoading(false);
                 return;
@@ -191,16 +227,12 @@ export default function StudyPage() {
             }
           }
         } catch {
-          // Fall through to loadCards
+          // Fall through to config screen
         }
-        await loadCards();
-      } else if (!hasSpecificTarget) {
-        // No specific target — just start fresh, don't prompt about old sessions
-        await loadCards();
-      } else {
-        // User chose a specific deck/category/mode — start fresh directly
-        await loadCards();
       }
+      // Show question type config screen before starting
+      setShowTypeConfig(true);
+      setLoading(false);
     };
     init();
     return () => reset();
@@ -247,6 +279,80 @@ export default function StudyPage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  // Question type config screen
+  if (showTypeConfig) {
+    return (
+      <div className="max-w-md mx-auto flex flex-col items-center justify-center min-h-[60vh] gap-6 px-4">
+        <div className="rounded-full bg-blue-100 dark:bg-blue-950 p-6">
+          <PlayCircle className="h-12 w-12 text-blue-600" />
+        </div>
+        <h2 className="text-2xl font-bold">出题设置</h2>
+        <p className="text-sm text-muted-foreground text-center">
+          {mode === "mix" ? "混合模式" : "复习模式"} · 选择题目类型
+        </p>
+
+        <div className="w-full space-y-2">
+          {([
+            { value: "all_qa" as const, label: "全问答题", desc: "所有题目以问答形式出题" },
+            { value: "all_choice" as const, label: "全选择题", desc: "所有题目以选择题形式出题" },
+            { value: "custom" as const, label: "指定比例", desc: "自定义问答题和选择题的比例" },
+          ]).map(({ value, label, desc }) => (
+            <button
+              key={value}
+              className={`w-full p-3 rounded-lg border text-left transition-colors ${
+                questionMode === value
+                  ? "border-blue-500 bg-blue-50 dark:bg-blue-950/50"
+                  : "border-border hover:bg-muted/50"
+              }`}
+              onClick={() => setQuestionMode(value)}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                  questionMode === value ? "border-blue-500" : "border-muted-foreground/30"
+                }`}>
+                  {questionMode === value && (
+                    <div className="w-2 h-2 rounded-full bg-blue-500" />
+                  )}
+                </div>
+                <div>
+                  <div className="font-medium text-sm">{label}</div>
+                  <div className="text-xs text-muted-foreground">{desc}</div>
+                </div>
+              </div>
+            </button>
+          ))}
+
+          {questionMode === "custom" && (
+            <div className="mt-3 p-3 rounded-lg bg-muted/50 space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span>问答题 <strong>{customRatio}%</strong></span>
+                <span>选择题 <strong>{100 - customRatio}%</strong></span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={10}
+                value={customRatio}
+                onChange={(e) => setCustomRatio(parseInt(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+          )}
+        </div>
+
+        <Button
+          className="w-full"
+          size="lg"
+          onClick={startWithConfig}
+        >
+          <PlayCircle className="mr-2 h-4 w-4" />
+          开始{mode === "mix" ? "练习" : "复习"}
+        </Button>
       </div>
     );
   }

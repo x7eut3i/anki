@@ -24,6 +24,8 @@ class UserResponse(BaseModel):
     desired_retention: float
     ai_import_batch_size: int
     timezone: str
+    study_question_mode: str
+    study_custom_ratio: int
 
     model_config = {"from_attributes": True}
 
@@ -36,6 +38,8 @@ class UserUpdate(BaseModel):
     desired_retention: float | None = None
     ai_import_batch_size: int | None = None
     timezone: str | None = None
+    study_question_mode: str | None = None
+    study_custom_ratio: int | None = None
 
 
 class TokenResponse(BaseModel):

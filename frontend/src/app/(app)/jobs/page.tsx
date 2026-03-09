@@ -122,7 +122,7 @@ export default function JobsPage() {
             查看异步AI任务的执行状态和结果
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -254,7 +254,6 @@ export default function JobsPage() {
                       {/* Timestamps */}
                       <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
                         <span>创建: {formatTime(job.created_at)}</span>
-                        {job.started_at && <span>开始: {formatTime(job.started_at)}</span>}
                         {job.completed_at && <span>完成: {formatTime(job.completed_at)}</span>}
                       </div>
                     </div>

@@ -116,7 +116,6 @@ interface AnalysisDetail extends AnalysisItem {
 const STATUS_LABELS: Record<string, { text: string; color: string; icon: React.ReactNode }> = {
   new: { text: "新", color: "bg-blue-100 text-blue-700", icon: <Sparkles className="h-3 w-3" /> },
   reading: { text: "在读", color: "bg-amber-100 text-amber-700", icon: <BookOpen className="h-3 w-3" /> },
-  finished: { text: "已读", color: "bg-green-100 text-green-700", icon: <CheckCircle2 className="h-3 w-3" /> },
   archived: { text: "归档", color: "bg-gray-100 text-gray-500", icon: <Archive className="h-3 w-3" /> },
 };
 

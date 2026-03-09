@@ -514,10 +514,12 @@ async def _bg_repair_articles_async(
     reanalyze_ids: list[int],
     cards_only_ids: list[int],
 ):
-    """Async implementation for batch repair."""
+    """Async implementation for batch repair with concurrency."""
+    import asyncio as _asyncio
     from app.database import engine
     from app.routers.ai_jobs import update_job_status
     from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
+    from datetime import datetime as dt_, timezone as tz_
 
     total = len(reanalyze_ids) + len(cards_only_ids)
     success_analyze = 0
@@ -533,35 +535,66 @@ async def _bg_repair_articles_async(
             update_job_status(job_id, "failed", error_message="AI配置不存在")
             return
 
-        # Phase 1: Re-analyze failed articles
-        for aid in reanalyze_ids:
-            try:
-                article = session.get(ArticleAnalysis, aid)
-                if not article:
-                    failed_count += 1
-                    processed += 1
-                    continue
+        # Use concurrency from IngestionConfig (same as source management)
+        from app.models.ingestion import IngestionConfig
+        ing_cfg = session.exec(select(IngestionConfig)).first()
+        concurrency = getattr(ing_cfg, "concurrency", 3) if ing_cfg else 3
+        concurrency = concurrency or 3
 
-                # Re-run AI analysis
-                analysis_data = await ai_analyze_article(
-                    session, config,
-                    title=article.title, content=article.content,
-                    user_id=user_id,
-                )
+        sem = _asyncio.Semaphore(concurrency)
+        state_lock = _asyncio.Lock()
 
-                if analysis_data:
-                    article.analysis_html = _build_analysis_html(article.title, analysis_data)
-                    article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
-                    article.quality_score = analysis_data.get("quality_score", 0)
-                    article.quality_reason = analysis_data.get("quality_reason", "")
-                    from datetime import datetime as dt_, timezone as tz_
-                    article.updated_at = dt_.now(tz_.utc)
-                    session.add(article)
-                    session.commit()
-                    success_analyze += 1
+        async def _repair_one(aid: int, needs_analysis: bool):
+            nonlocal success_analyze, success_cards, failed_count, processed
 
-                    # Also generate cards for re-analyzed articles
-                    try:
+            async with sem:
+                try:
+                    async with state_lock:
+                        article = session.get(ArticleAnalysis, aid)
+                    if not article:
+                        async with state_lock:
+                            failed_count += 1
+                            processed += 1
+                        return
+
+                    if needs_analysis:
+                        # Re-run AI analysis
+                        analysis_data = await ai_analyze_article(
+                            session, config,
+                            title=article.title, content=article.content,
+                            user_id=user_id,
+                        )
+
+                        if analysis_data:
+                            async with state_lock:
+                                article.analysis_html = _build_analysis_html(article.title, analysis_data)
+                                article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
+                                article.quality_score = analysis_data.get("quality_score", 0)
+                                article.quality_reason = analysis_data.get("quality_reason", "")
+                                article.updated_at = dt_.now(tz_.utc)
+                                session.add(article)
+                                session.commit()
+                                success_analyze += 1
+
+                            # Also generate cards for re-analyzed articles
+                            try:
+                                cards_created, _ = await ai_generate_cards(
+                                    session, config,
+                                    title=article.title,
+                                    content=article.content,
+                                    source_url=article.source_url or "",
+                                    user_id=user_id,
+                                )
+                                if cards_created > 0:
+                                    async with state_lock:
+                                        success_cards += cards_created
+                            except Exception as e:
+                                logger.warning("Card generation failed during repair for article %d: %s", aid, e)
+                        else:
+                            async with state_lock:
+                                failed_count += 1
+                    else:
+                        # Cards-only: generate cards for articles that have analysis but no cards
                         cards_created, _ = await ai_generate_cards(
                             session, config,
                             title=article.title,
@@ -570,66 +603,36 @@ async def _bg_repair_articles_async(
                             user_id=user_id,
                         )
                         if cards_created > 0:
-                            success_cards += cards_created
-                    except Exception as e:
-                        logger.warning("Card generation failed during repair for article %d: %s", aid, e)
-                else:
-                    failed_count += 1
-            except Exception as e:
-                logger.error("Repair re-analysis failed for article %d: %s", aid, e)
-                failed_count += 1
+                            async with state_lock:
+                                success_cards += cards_created
+                                success_analyze += 1
+                        else:
+                            async with state_lock:
+                                failed_count += 1
+                except Exception as e:
+                    logger.error("Repair failed for article %d: %s", aid, e)
+                    async with state_lock:
+                        failed_count += 1
+                finally:
+                    async with state_lock:
+                        processed += 1
+                        progress = int(5 + (processed / total) * 90)
+                    update_job_status(job_id, "running", progress=progress)
 
-            processed += 1
-            progress = int(5 + (processed / total) * 90)
-            update_job_status(job_id, "running", progress=progress)
-
-        # Phase 2: Generate cards for articles that have analysis but no cards
-        for aid in cards_only_ids:
-            try:
-                article = session.get(ArticleAnalysis, aid)
-                if not article:
-                    failed_count += 1
-                    processed += 1
-                    continue
-
-                cards_created, _ = await ai_generate_cards(
-                    session, config,
-                    title=article.title,
-                    content=article.content,
-                    source_url=article.source_url or "",
-                    user_id=user_id,
-                )
-                if cards_created > 0:
-                    success_cards += cards_created
-                    success_analyze += 1  # count as success for the article
-                else:
-                    failed_count += 1
-            except Exception as e:
-                logger.error("Repair card generation failed for article %d: %s", aid, e)
-                failed_count += 1
-
-            processed += 1
-            progress = int(5 + (processed / total) * 90)
-            update_job_status(job_id, "running", progress=progress)
+        # Build task list: re-analyze + cards-only
+        tasks = [_repair_one(aid, True) for aid in reanalyze_ids] + \
+                [_repair_one(aid, False) for aid in cards_only_ids]
+        await _asyncio.gather(*tasks)
 
     # Final status
     result_msg = f"修复完成: {success_analyze} 篇成功, {failed_count} 篇失败, 共生成 {success_cards} 张卡片"
-    if failed_count > 0:
-        update_job_status(job_id, "completed", progress=100,
-                          result_json=json.dumps({
-                              "success_articles": success_analyze,
-                              "failed": failed_count,
-                              "cards_created": success_cards,
-                              "message": result_msg,
-                          }))
-    else:
-        update_job_status(job_id, "completed", progress=100,
-                          result_json=json.dumps({
-                              "success_articles": success_analyze,
-                              "failed": 0,
-                              "cards_created": success_cards,
-                              "message": result_msg,
-                          }))
+    update_job_status(job_id, "completed", progress=100,
+                      result_json=json.dumps({
+                          "success_articles": success_analyze,
+                          "failed": failed_count,
+                          "cards_created": success_cards,
+                          "message": result_msg,
+                      }))
 
 
 @router.post("/batch-delete")

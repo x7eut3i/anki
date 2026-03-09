@@ -19,6 +19,8 @@ class User(SQLModel, table=True):
     daily_review_limit: int = Field(default=200)
     session_card_limit: int = Field(default=50)
     desired_retention: float = Field(default=0.9)
+    study_question_mode: str = Field(default="custom")  # all_qa, all_choice, custom
+    study_custom_ratio: int = Field(default=60)  # QA percentage (0-100)
 
     # AI import preferences
     ai_import_batch_size: int = Field(default=30)
