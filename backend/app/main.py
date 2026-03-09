@@ -222,6 +222,43 @@ def seed_default_decks():
         logger.error("❌ Failed to seed default decks: %s", e, exc_info=True)
 
 
+def _backfill_ai_deck_categories():
+    """Backfill category_id for AI-generated decks (AI-成语, AI-时政热点, etc.).
+
+    Matches deck names like "AI-{category.name}" and sets the correct category_id.
+    Runs on every startup so existing decks get fixed automatically.
+    """
+    from sqlmodel import Session, select
+    from app.database import engine
+
+    try:
+        with Session(engine) as session:
+            all_categories = session.exec(select(Category)).all()
+            cat_by_name = {c.name: c for c in all_categories}
+
+            ai_decks = session.exec(
+                select(Deck).where(Deck.name.startswith("AI-"))  # type: ignore[union-attr]
+            ).all()
+
+            updated = 0
+            for deck in ai_decks:
+                if deck.category_id:
+                    continue  # already has category
+                # Extract category name from "AI-成语" → "成语"
+                cat_name = deck.name[3:]  # strip "AI-" prefix
+                cat = cat_by_name.get(cat_name)
+                if cat:
+                    deck.category_id = cat.id
+                    session.add(deck)
+                    updated += 1
+
+            if updated:
+                session.commit()
+                logger.info("🔧 Backfilled category_id for %d AI decks", updated)
+    except Exception as e:
+        logger.warning("Failed to backfill AI deck categories: %s", e)
+
+
 def seed_ai_configs():
     """Auto-configure AI for each user who has no AI config, using ai_config.json."""
     from sqlmodel import Session, select
@@ -317,6 +354,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Database tables ready")
     seed_categories()
     seed_default_decks()
+    _backfill_ai_deck_categories()
     seed_ai_configs()
     seed_article_sources()
 

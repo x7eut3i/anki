@@ -668,10 +668,19 @@ async def ai_generate_cards(
         deck_name = f"AI-{category.name}" if category else "AI-时政热点"
         deck = session.exec(select(Deck).where(Deck.name == deck_name)).first()
         if not deck:
-            deck = Deck(name=deck_name, description=f"AI自动生成的{deck_name[3:]}卡片")
+            deck = Deck(
+                name=deck_name,
+                description=f"AI自动生成的{deck_name[3:]}卡片",
+                category_id=category.id if category else None,
+            )
             session.add(deck)
             session.commit()
             session.refresh(deck)
+        elif category and not deck.category_id:
+            # Backfill category_id for existing AI decks created without it
+            deck.category_id = category.id
+            session.add(deck)
+            session.commit()
 
         distractors = card_data.get("distractors", "")
         if isinstance(distractors, list):
