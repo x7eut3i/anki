@@ -52,3 +52,32 @@ def submit_quiz(
         return QuizSubmitResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/save/{session_id}")
+def save_quiz_progress(
+    session_id: int,
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Save quiz progress (暂存) — persists user answers to server for session recovery."""
+    import json as _json
+    from app.models.study_session import StudySession
+
+    study_session = session.get(StudySession, session_id)
+    if not study_session or study_session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if study_session.is_completed:
+        raise HTTPException(status_code=400, detail="Session already completed")
+
+    answers = data.get("answers", {})
+    current_q = data.get("current_q", 0)
+
+    study_session.quiz_user_answers = _json.dumps(answers, ensure_ascii=False)
+    study_session.cards_reviewed = len(answers)
+    study_session.current_question = current_q
+    session.add(study_session)
+    session.commit()
+
+    return {"saved": len(answers), "session_id": session_id}

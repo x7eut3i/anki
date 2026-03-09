@@ -18,7 +18,6 @@ class IngestionConfig(SQLModel, table=True):
     quality_threshold: float = Field(default=7.0)  # Min quality score to create cards (1-10, decimals OK)
     auto_analyze: bool = Field(default=True)      # Auto deep-reading analysis for high-quality articles
     auto_create_cards: bool = Field(default=True) # Auto create flashcards from articles
-    concurrency: int = Field(default=3)             # Number of articles processed concurrently
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

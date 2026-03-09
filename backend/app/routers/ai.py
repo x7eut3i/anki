@@ -47,7 +47,6 @@ def _config_to_response(config: AIConfig) -> AIConfigResponse:
         rpm_limit=getattr(config, "rpm_limit", 0) or 0,
         max_daily_calls=config.max_daily_calls,
         import_batch_size=getattr(config, "import_batch_size", 30) or 30,
-        import_concurrency=getattr(config, "import_concurrency", 3) or 3,
         max_tokens=getattr(config, "max_tokens", 8192) or 8192,
         temperature=getattr(config, "temperature", 0.3) or 0.3,
         max_retries=getattr(config, "max_retries", 3) or 3,
@@ -122,7 +121,6 @@ def create_ai_config(
         model_reading=data.model_reading,
         max_daily_calls=data.max_daily_calls,
         import_batch_size=data.import_batch_size,
-        import_concurrency=data.import_concurrency,
     )
     session.add(config)
     session.commit()
@@ -1050,6 +1048,94 @@ def _bg_complete_and_create_cards(
                 needs_ai = [c for c in cards_input if not c.get("back", "").strip()]
                 has_back = [c for c in cards_input if c.get("back", "").strip()]
 
+            # ── Special mode: 古诗词名句 poem expansion ──
+            # When all cards have category "古诗词名句" and fronts are poem names,
+            # use a special prompt that generates multiple cards per poem.
+            is_poem_expand = all(
+                c.get("category", "") == "古诗词名句" and not c.get("back", "").strip()
+                for c in cards_input
+            )
+
+            if is_poem_expand:
+                update_job_status(job_id, "running", progress=20)
+                from app.services.prompts import make_poem_expand_user_prompt
+
+                poem_names = [c.get("front", "").strip() for c in cards_input if c.get("front", "").strip()]
+                user_prompt = make_poem_expand_user_prompt(poem_names)
+                messages = [
+                    {"role": "system", "content": get_prompt(session, "card_system", CARD_SYSTEM_PROMPT)},
+                    {"role": "user", "content": user_prompt},
+                ]
+                try:
+                    result = _run_async(ai.chat_completion(messages, feature="complete_cards"))
+                    content = result["content"]
+                    if "```json" in content:
+                        content = content.split("```json")[1].split("```")[0]
+                    elif "```" in content:
+                        content = content.split("```")[1].split("```")[0]
+                    import re
+                    content = re.sub(r",\s*([}\]])", r"\1", content)
+                    parsed = _json.loads(content)
+                    if isinstance(parsed, dict):
+                        all_cards = parsed.get("cards", [])
+                    elif isinstance(parsed, list):
+                        all_cards = parsed
+                    else:
+                        all_cards = []
+                except Exception as e:
+                    logger.warning("BG poem expand AI error: %s", e)
+                    all_cards = []
+
+                update_job_status(job_id, "running", progress=70)
+
+                # Create all AI-generated cards directly
+                created = 0
+                for item in all_cards:
+                    front = item.get("front", "").strip()
+                    if not front:
+                        continue
+                    back = item.get("back", "")
+                    explanation = item.get("explanation", "")
+                    distractors_raw = item.get("distractors", [])
+                    if isinstance(distractors_raw, list):
+                        distractors_str = _json.dumps(distractors_raw, ensure_ascii=False)
+                    else:
+                        distractors_str = str(distractors_raw) if distractors_raw else ""
+                    meta_info = item.get("meta_info", "")
+                    if isinstance(meta_info, dict):
+                        meta_info = _json.dumps(meta_info, ensure_ascii=False)
+                    tags = item.get("tags", "")
+
+                    card = Card(
+                        deck_id=deck_id,
+                        category_id=category_id or deck.category_id,
+                        front=front,
+                        back=back,
+                        explanation=explanation,
+                        distractors=distractors_str,
+                        tags=tags,
+                        meta_info=meta_info,
+                        is_ai_generated=True,
+                    )
+                    session.add(card)
+                    created += 1
+
+                deck.card_count = (deck.card_count or 0) + created
+                session.add(deck)
+                session.commit()
+
+                update_job_status(
+                    job_id, "completed",
+                    result_json=_json.dumps({
+                        "created": created,
+                        "ai_enriched": created,
+                        "total": len(cards_input),
+                        "poem_expand": True,
+                    }, ensure_ascii=False),
+                )
+                return
+
+            # ── Standard mode: 1-to-1 card completion ──
             ai_results: dict[int, dict] = {}  # index -> completion
 
             if needs_ai:

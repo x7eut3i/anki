@@ -124,11 +124,14 @@ class ReviewService:
 
         rows = self.session.exec(query).all()
 
+        # Batch-lookup article info for all source URLs
+        article_cache = self._batch_lookup_articles([card for card, _ in rows])
+
         # Build response: merge card + progress into dict-like objects
         cards_with_progress = []
         for card, progress in rows:
             cards_with_progress.append(
-                self._merge_card_progress(card, progress)
+                self._merge_card_progress(card, progress, article_cache)
             )
 
         # Count by state
@@ -339,7 +342,7 @@ class ReviewService:
         self.session.refresh(session_obj)
         return session_obj
 
-    def get_active_session(self, exclude_modes: list[str] | None = None) -> StudySession | None:
+    def get_active_session(self, exclude_modes: list[str] | None = None, only_mode: str | None = None) -> StudySession | None:
         """Get the most recent incomplete study session for recovery.
 
         Auto-closes sessions older than 24 hours.
@@ -367,7 +370,9 @@ class ReviewService:
                 StudySession.is_completed == False,
             )
         )
-        if exclude_modes:
+        if only_mode:
+            query = query.where(StudySession.mode == only_mode)
+        elif exclude_modes:
             for mode in exclude_modes:
                 query = query.where(StudySession.mode != mode)
         query = query.order_by(StudySession.started_at.desc())
@@ -391,6 +396,41 @@ class ReviewService:
         remaining = json.loads(study_session.remaining_card_ids)
         if card_id in remaining:
             remaining.remove(card_id)
+        study_session.remaining_card_ids = json.dumps(remaining)
+
+        if not remaining:
+            study_session.is_completed = True
+            study_session.finished_at = datetime.now(timezone.utc)
+
+        self.session.add(study_session)
+        self.session.commit()
+        self.session.refresh(study_session)
+        return study_session
+
+    def batch_update_session_progress(
+        self, session_id: int, card_ids: list[int], is_correct_list: list[bool]
+    ) -> StudySession:
+        """Update session after reviewing multiple cards in one batch."""
+        study_session = self.session.get(StudySession, session_id)
+        if not study_session or study_session.user_id != self.user_id:
+            raise ValueError("Session not found")
+
+        remaining = json.loads(study_session.remaining_card_ids)
+        newly_reviewed = 0
+        correct = 0
+        again = 0
+        for card_id, is_ok in zip(card_ids, is_correct_list):
+            if card_id in remaining:
+                remaining.remove(card_id)
+                newly_reviewed += 1
+                if is_ok:
+                    correct += 1
+                else:
+                    again += 1
+
+        study_session.cards_reviewed += newly_reviewed
+        study_session.cards_correct += correct
+        study_session.cards_again += again
         study_session.remaining_card_ids = json.dumps(remaining)
 
         if not remaining:
@@ -685,14 +725,41 @@ class ReviewService:
             .where(col(Card.id).in_(card_ids))
         ).all()
 
-        cards = [self._merge_card_progress(card, progress) for card, progress in rows]
+        article_cache = self._batch_lookup_articles([card for card, _ in rows])
+        cards = [self._merge_card_progress(card, progress, article_cache) for card, progress in rows]
 
         # Maintain original order from card_ids
         id_order = {cid: i for i, cid in enumerate(card_ids)}
         cards.sort(key=lambda c: id_order.get(c["id"], 999999))
         return cards
 
-    def _merge_card_progress(self, card: Card, progress: UserCardProgress | None) -> dict:
+    def _batch_lookup_articles(self, cards: list[Card]) -> dict[str, dict]:
+        """Batch-lookup ArticleAnalysis records by card source URLs.
+        Returns a dict keyed by source URL with article info."""
+        from app.models.article_analysis import ArticleAnalysis
+
+        source_urls = list({c.source for c in cards if c.source})
+        if not source_urls:
+            return {}
+
+        items = self.session.exec(
+            select(ArticleAnalysis.id, ArticleAnalysis.title,
+                   ArticleAnalysis.quality_score, ArticleAnalysis.source_name,
+                   ArticleAnalysis.source_url)
+            .where(col(ArticleAnalysis.source_url).in_(source_urls))
+        ).all()
+        result: dict[str, dict] = {}
+        for aid, atitle, aqscore, asname, aurl in items:
+            if aurl and aurl not in result:
+                result[aurl] = {
+                    "id": aid,
+                    "title": atitle,
+                    "quality_score": aqscore,
+                    "source_name": asname or "",
+                }
+        return result
+
+    def _merge_card_progress(self, card: Card, progress: UserCardProgress | None, article_cache: dict[str, dict] | None = None) -> dict:
         """Merge a Card and its optional UserCardProgress into a flat dict
         compatible with CardResponse."""
         from app.models.tag import CardTag, Tag
@@ -741,6 +808,36 @@ class ReviewService:
             "lapses": progress.lapses if progress else 0,
             "is_suspended": progress.is_suspended if progress else False,
         }
+        # Article info from cache
+        if article_cache and card.source and card.source in article_cache:
+            art = article_cache[card.source]
+            d["article_id"] = art["id"]
+            d["article_title"] = art["title"]
+            d["article_quality_score"] = art["quality_score"]
+            d["article_source_name"] = art["source_name"]
+
+        # Scheduling preview: compute next-due for each rating
+        try:
+            card_data = {
+                "due": d["due"],
+                "stability": d["stability"],
+                "difficulty": d["difficulty"],
+                "step": progress.step if progress else 0,
+                "reps": d["reps"],
+                "lapses": d["lapses"],
+                "state": d["state"],
+                "last_review": progress.last_review if progress else None,
+            }
+            p = self.fsrs.preview_ratings(card_data)
+            d["scheduling_preview"] = {
+                "1": f"{p['again_days']}天" if p.get('again_days', 0) > 0 else "<1天",
+                "2": f"{p['hard_days']}天" if p.get('hard_days', 0) > 0 else "<1天",
+                "3": f"{p['good_days']}天" if p.get('good_days', 0) > 0 else "<1天",
+                "4": f"{p['easy_days']}天" if p.get('easy_days', 0) > 0 else "<1天",
+            }
+        except Exception:
+            pass
+
         return d
 
     # ── Reset progress ────────────────────────────────────────────────

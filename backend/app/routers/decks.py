@@ -10,6 +10,7 @@ from app.auth import get_current_user
 from app.database import get_session
 from app.models.deck import Deck
 from app.models.user import User
+from app.models.user_card_progress import UserCardProgress
 from app.schemas.deck import DeckCreate, DeckUpdate, DeckResponse, DeckListResponse
 
 router = APIRouter(prefix="/api/decks", tags=["decks"])
@@ -80,7 +81,25 @@ def list_decks(
         if d.card_count != actual_count:
             d.card_count = actual_count
             session.add(d)
-        deck_responses.append(DeckResponse.model_validate(d))
+
+        # Compute card status counts: NEW(0), LEARNING(1), REVIEW(2), RELEARNING(3)
+        status_rows = session.exec(
+            select(UserCardProgress.state, func.count())
+            .join(Card, UserCardProgress.card_id == Card.id)
+            .where(Card.deck_id == d.id)
+            .group_by(UserCardProgress.state)
+        ).all()
+        status_map = {int(row[0]): int(row[1]) for row in status_rows}
+        has_progress_count = sum(status_map.values())
+        new_count = actual_count - has_progress_count  # Cards without progress = new
+        learning_count = status_map.get(0, 0) + status_map.get(1, 0) + status_map.get(3, 0)  # NEW/LEARNING/RELEARNING in FSRS
+        mastered_count = status_map.get(2, 0)  # REVIEW state = mastered
+
+        resp = DeckResponse.model_validate(d)
+        resp.new_count = new_count
+        resp.learning_count = learning_count
+        resp.mastered_count = mastered_count
+        deck_responses.append(resp)
     session.commit()
 
     return DeckListResponse(
@@ -98,7 +117,25 @@ def get_deck(
     deck = session.get(Deck, deck_id)
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
-    return DeckResponse.model_validate(deck)
+
+    from app.models.card import Card
+    actual_count = session.exec(
+        select(func.count()).select_from(Card).where(Card.deck_id == deck.id)
+    ).one()
+    status_rows = session.exec(
+        select(UserCardProgress.state, func.count())
+        .join(Card, UserCardProgress.card_id == Card.id)
+        .where(Card.deck_id == deck.id)
+        .group_by(UserCardProgress.state)
+    ).all()
+    status_map = {int(row[0]): int(row[1]) for row in status_rows}
+    has_progress_count = sum(status_map.values())
+
+    resp = DeckResponse.model_validate(deck)
+    resp.new_count = actual_count - has_progress_count
+    resp.learning_count = status_map.get(0, 0) + status_map.get(1, 0) + status_map.get(3, 0)
+    resp.mastered_count = status_map.get(2, 0)
+    return resp
 
 
 @router.put("/{deck_id}", response_model=DeckResponse)

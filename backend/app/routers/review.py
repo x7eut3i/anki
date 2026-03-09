@@ -12,6 +12,7 @@ from app.models.user import User
 from app.schemas.review import (
     ReviewRequest,
     ReviewResponse,
+    BatchAnswerRequest,
     SchedulingPreview,
     DueCardsRequest,
     StudySessionCreate,
@@ -94,6 +95,47 @@ def submit_review(
         raise HTTPException(status_code=500, detail=f"Review failed: {str(e)}")
 
 
+@router.post("/batch-answer")
+def batch_submit_reviews(
+    data: BatchAnswerRequest,
+    service: ReviewService = Depends(_get_review_service),
+):
+    """Submit multiple card reviews in a single request.
+
+    Accepts a BatchAnswerRequest {answers: [...], session_id?: N}.
+    Also updates the study session remaining_card_ids when session_id is provided.
+    """
+    answers = data.answers
+    session_id = data.session_id
+
+    results = []
+    errors = []
+    reviewed_card_ids = []
+    for ans in answers:
+        try:
+            result = service.review_card(
+                card_id=ans.card_id,
+                rating=ans.rating,
+                duration_ms=ans.review_duration_ms,
+            )
+            results.append(result)
+            reviewed_card_ids.append(ans.card_id)
+        except Exception as e:
+            errors.append({"card_id": ans.card_id, "error": str(e)})
+
+    # Update study session if provided
+    if session_id and reviewed_card_ids:
+        try:
+            service.batch_update_session_progress(
+                session_id, reviewed_card_ids,
+                [ans.rating >= 3 for ans in answers if ans.card_id in reviewed_card_ids],
+            )
+        except Exception as e:
+            logger.warning("Failed to update session %d: %s", session_id, e)
+
+    return {"results": results, "errors": errors, "processed": len(results)}
+
+
 @router.get("/preview/{card_id}", response_model=SchedulingPreview)
 def preview_ratings(
     card_id: int,
@@ -104,6 +146,31 @@ def preview_ratings(
         return SchedulingPreview(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/preview/batch")
+def batch_preview_ratings(
+    data: dict,
+    service: ReviewService = Depends(_get_review_service),
+):
+    """Get scheduling previews for multiple cards at once.
+
+    Returns a dict keyed by card_id string, with human-readable interval labels.
+    """
+    card_ids = data.get("card_ids", [])
+    results = {}
+    for cid in card_ids:
+        try:
+            p = service.preview_ratings(cid)
+            results[str(cid)] = {
+                "1": f"{p['again_days']}天" if p.get('again_days', 0) > 0 else "<1天",
+                "2": f"{p['hard_days']}天" if p.get('hard_days', 0) > 0 else "<1天",
+                "3": f"{p['good_days']}天" if p.get('good_days', 0) > 0 else "<1天",
+                "4": f"{p['easy_days']}天" if p.get('easy_days', 0) > 0 else "<1天",
+            }
+        except ValueError:
+            pass
+    return results
 
 
 @router.post("/session", response_model=StudySessionResponse)
@@ -132,8 +199,12 @@ def get_active_session(
     mode: str | None = None,
     service: ReviewService = Depends(_get_review_service),
 ):
-    exclude_modes = ["quiz"] if mode != "quiz" else None
-    session_obj = service.get_active_session(exclude_modes=exclude_modes)
+    if mode == "quiz":
+        # Return only quiz sessions
+        session_obj = service.get_active_session(only_mode="quiz")
+    else:
+        # Exclude quiz sessions by default
+        session_obj = service.get_active_session(exclude_modes=["quiz"])
     if session_obj:
         return StudySessionResponse.model_validate(session_obj)
     return None

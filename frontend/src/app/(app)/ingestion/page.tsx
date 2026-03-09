@@ -334,19 +334,6 @@ export default function IngestionPage() {
                   低于此分数的文章不会自动生成卡片
                 </p>
               </div>
-              <div>
-                <label className="text-sm font-medium">并发处理数</label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={config.concurrency ?? 3}
-                  onChange={(e) => setConfig({ ...config, concurrency: parseInt(e.target.value) || 3 })}
-                  className="mt-1"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  同时处理的文章数量，增大可提高抓取速度。默认 3
-                </p>
-              </div>
             </div>
 
             <div className="flex items-center gap-6">

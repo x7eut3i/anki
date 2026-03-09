@@ -121,7 +121,9 @@ export default function Sidebar() {
 
   // Check if a nav item should be marked active
   const isNavActive = (item: NavItem) => {
-    if (pathname.startsWith(item.href)) return true;
+    // Exact match or child-path match (href + "/") to avoid
+    // prefix collisions like /ai matching /ai-stats
+    if (pathname === item.href || pathname.startsWith(item.href + "/")) return true;
     // /tag-detail pages should highlight the 标签管理 (/tags) item
     if (item.href === "/tags" && pathname.startsWith("/tag-detail")) return true;
     return false;

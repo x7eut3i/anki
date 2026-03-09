@@ -16,6 +16,32 @@ def get_category_list(session: Session) -> str:
     """Get comma-separated category names from DB."""
     from app.models.category import Category
     cats = session.exec(select(Category)).all()
+
+
+def make_poem_expand_user_prompt(poem_names: list[str]) -> str:
+    """Build user prompt for expanding poem names into multiple fill-in-the-blank cards.
+
+    Given a list of poem names (e.g. ["静夜思", "登鹳雀楼"]),
+    generates a prompt that asks the AI to create multiple cards per poem.
+    """
+    poems_str = "、".join(poem_names)
+    return (
+        f"请根据以下诗词名，为每首诗词生成多张「古诗词名句」填空卡片。\n\n"
+        f"诗词名列表：{poems_str}\n\n"
+        f"═══ 生成规则 ═══\n"
+        f"1. 对每首诗/词，找出其中所有名句（著名的、常考的、有文学价值的句联），每个名句生成一张填空卡片\n"
+        f"2. 较短的诗（如绝句）通常生成 2-4 张卡片；较长的诗（如律诗、词）可生成 4-8 张\n"
+        f"3. 每张卡片的 front 为诗句填空（将1-2个关键词替换为______），back 为被挖空的词/句\n"
+        f"4. 严格遵循 system prompt 中【古诗词名句】的字段格式要求\n"
+        f"5. 所有卡片的 category 统一设为「古诗词名句」\n"
+        f"6. facts.full_poem 填写全诗原文，facts.author 填作者，facts.dynasty 填朝代，facts.work 填作品名\n"
+        f"7. facts.appreciation 填赏析要点（此句为何成为名句、运用了什么修辞手法等）\n"
+        f"8. 挖空策略：优先挖关键动词、形容词、意象词，使填空有辨析价值而非机械记忆\n"
+        f"   例：「______疑是地上霜」✗（太简单） → 「床前明月光，疑是______」✓（考察意象理解）\n\n"
+        f"═══ 返回格式 ═══\n"
+        f"直接返回纯JSON数组，不要markdown代码块标记。每张卡片包含：\n"
+        f"front, back, explanation, distractors(3个), tags, category, meta_info(含facts, knowledge, exam_focus, alternate_questions)\n"
+    )
     return "、".join(c.name for c in cats)
 
 

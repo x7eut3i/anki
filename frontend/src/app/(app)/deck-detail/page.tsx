@@ -766,16 +766,14 @@ export default function DeckDetailPage() {
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">来源 (source)</label>
-                <input
-                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={editForm.source}
-                  onChange={(e) => setEditForm({ ...editForm, source: e.target.value })}
-                />
+                <div className="w-full min-h-[36px] rounded-md border border-input bg-muted/50 px-3 py-2 text-sm text-muted-foreground break-all">
+                  {editForm.source || <span className="italic">无</span>}
+                </div>
               </div>
               <div>
                 <label className="text-sm font-medium mb-1 block">元信息 (meta_info) — JSON</label>
                 <textarea
-                  className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
+                  className="w-full min-h-[240px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
                   value={editForm.meta_info}
                   onChange={(e) => setEditForm({ ...editForm, meta_info: e.target.value })}
                   placeholder='{"knowledge": "...", "exam_focus": "..."}'

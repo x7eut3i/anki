@@ -173,12 +173,17 @@ export function CardHeaderBadges({ card, highlightQuery }: { card: any; highligh
 }
 
 /* ── Article Source Link (lazy-loaded from card.source URL) ── */
-export function ArticleSourceLink({ sourceUrl }: { sourceUrl: string }) {
+export function ArticleSourceLink({ sourceUrl, preloaded }: { sourceUrl: string; preloaded?: { id: number; title: string; quality_score: number; source_name: string } | null }) {
   const { token } = useAuthStore();
-  const [article, setArticle] = useState<{ id: number; title: string; quality_score: number; source_name: string } | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [article, setArticle] = useState<{ id: number; title: string; quality_score: number; source_name: string } | null>(preloaded || null);
+  const [loaded, setLoaded] = useState(preloaded !== undefined);
 
   useEffect(() => {
+    if (preloaded !== undefined) {
+      setArticle(preloaded);
+      setLoaded(true);
+      return;
+    }
     if (!token || !sourceUrl) return;
     let cancelled = false;
     reading.list({ source_url: sourceUrl, page_size: 1 }, token)
@@ -191,7 +196,7 @@ export function ArticleSourceLink({ sourceUrl }: { sourceUrl: string }) {
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
-  }, [sourceUrl, token]);
+  }, [sourceUrl, token, preloaded]);
 
   if (!loaded || !article) return null;
 
@@ -416,23 +421,41 @@ export function CardTagManager({
   token,
   onClose,
   onTagsChange,
+  initialAllTags,
+  initialCardTags,
 }: {
   cardId: number;
   token: string;
   onClose?: () => void;
   onTagsChange?: (tags: { id: number; name: string; color: string }[]) => void;
+  initialAllTags?: any[];
+  initialCardTags?: any[];
 }) {
-  const [allTags, setAllTags] = useState<any[]>([]);
-  const [cardTags, setCardTags] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [allTags, setAllTags] = useState<any[]>(initialAllTags || []);
+  const [cardTags, setCardTags] = useState<any[]>(initialCardTags || []);
+  const [loading, setLoading] = useState(!initialAllTags);
 
   useEffect(() => {
+    // Only fetch what's not already provided
+    const needAllTags = !initialAllTags;
+    const needCardTags = !initialCardTags;
+
+    if (!needAllTags && !needCardTags) {
+      setAllTags(initialAllTags!);
+      setCardTags(initialCardTags!);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
-    Promise.all([
-      tagsApi.list(token),
-      tagsApi.getCardTags(cardId, token),
-    ])
+
+    const promises: Promise<any>[] = [
+      needAllTags ? tagsApi.list(token) : Promise.resolve(initialAllTags),
+      needCardTags ? tagsApi.getCardTags(cardId, token) : Promise.resolve(initialCardTags),
+    ];
+
+    Promise.all(promises)
       .then(([tags, ct]) => {
         if (!cancelled) {
           setAllTags(tags);
@@ -444,7 +467,7 @@ export function CardTagManager({
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [cardId, token]);
+  }, [cardId, token, initialAllTags, initialCardTags]);
 
   const toggleTag = async (tagId: number) => {
     const existing = cardTags.find((t: any) => t.id === tagId);

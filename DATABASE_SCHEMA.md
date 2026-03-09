@@ -272,6 +272,7 @@ AI驱动的时政文章深度阅读分析。由文章管道自动生成或用户
 | created_at | DATETIME | | now(utc) | 创建时间 |
 | updated_at | DATETIME | | now(utc) | 更新时间 |
 | finished_at | DATETIME | | NULL | 完成阅读时间 |
+| last_read_at | DATETIME | | NULL | 上次阅读时间（每次打开自动更新） |
 
 **`analysis_json` 结构说明：**
 

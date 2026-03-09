@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ai_max_daily_calls: int = 50
 
     # AI Import batching (tune per model context window)
-    ai_import_batch_chars: int = 5000
+    ai_import_batch_chars: int = 128 * 1024
     ai_import_batch_rows: int = 30
 
     # Ingestion

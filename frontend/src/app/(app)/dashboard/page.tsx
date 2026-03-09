@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/store";
-import { review, categories as catApi } from "@/lib/api";
+import { review, categories as catApi, reading } from "@/lib/api";
 import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,8 @@ export default function DashboardPage() {
   const [aiCats, setAiCats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState<any>(null);
+  const [recommendation, setRecommendation] = useState<any>(null);
+  const [quizRecovery, setQuizRecovery] = useState<any>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -35,11 +37,14 @@ export default function DashboardPage() {
       review.stats(token, getUserTimezone()),
       catApi.listAll(token),
       review.getActiveSession(token).catch(() => null),
+      reading.dailyRecommendation(token).catch(() => null),
+      review.getActiveQuizSession(token).catch(() => null),
     ])
-      .then(([s, catData, session]) => {
+      .then(([s, catData, session, rec, quizSession]) => {
         setStats(s);
         setCats(catData.categories);
         setAiCats(catData.ai_categories || []);
+        if (rec && rec.id) setRecommendation(rec);
         if (session && !session.is_completed) {
           try {
             const remaining = JSON.parse(session.remaining_card_ids || "[]");
@@ -49,6 +54,10 @@ export default function DashboardPage() {
           } catch {
             // ignore parse errors
           }
+        }
+        // Check for active quiz session on server
+        if (quizSession && !quizSession.is_completed) {
+          setQuizRecovery(quizSession);
         }
       })
       .finally(() => setLoading(false));
@@ -84,18 +93,87 @@ export default function DashboardPage() {
             <div className="flex items-center gap-3">
               <PlayCircle className="h-8 w-8 text-primary animate-pulse" />
               <div>
-                <p className="font-semibold">有未完成的学习</p>
+                <p className="font-semibold">
+                  有未完成的{activeSession.mode === "mix" ? "混合练习" : "学习"}
+                </p>
                 <p className="text-sm text-muted-foreground">
                   还剩 {activeSession.remaining} 张卡片未完成。开始新学习将自动放弃此会话。
                 </p>
               </div>
             </div>
-            <Link href="/study?resume=1">
+            <Link href={activeSession.mode === "mix" ? "/study?mode=mix&resume=1" : "/study?resume=1"}>
               <Button>
                 <PlayCircle className="mr-2 h-4 w-4" />
-                继续学习
+                继续{activeSession.mode === "mix" ? "练习" : "学习"}
               </Button>
             </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Quiz recovery banner */}
+      {!activeSession && quizRecovery && (
+        <Card className="border-green-500/50 bg-green-50/50 dark:bg-green-950/20">
+          <CardContent className="flex items-center justify-between py-4">
+            <div className="flex items-center gap-3">
+              <ClipboardCheck className="h-8 w-8 text-green-600 animate-pulse" />
+              <div>
+                <p className="font-semibold">有未完成的模拟测试</p>
+                <p className="text-sm text-muted-foreground">
+                  已答 {quizRecovery.cards_reviewed || 0} / {quizRecovery.total_cards || 0} 题，可以继续测试。
+                </p>
+              </div>
+            </div>
+            <Link href="/quiz?resume=1">
+              <Button className="bg-green-600 hover:bg-green-700">
+                <ClipboardCheck className="mr-2 h-4 w-4" />
+                继续测试
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Daily recommendation */}
+      {recommendation && (
+        <Card
+          className="bg-card border hover:shadow-sm transition-shadow cursor-pointer"
+          onClick={() => window.location.href = `/reading?article_id=${recommendation.id}`}
+        >
+          <CardContent className="py-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs text-muted-foreground">📖 今日推荐精读</span>
+                </div>
+                <h3 className="font-medium text-sm truncate">{recommendation.title}</h3>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                  {recommendation.status && (
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
+                      recommendation.status === "reading" ? "bg-amber-100 text-amber-700" :
+                      recommendation.status === "archived" ? "bg-gray-100 text-gray-500" :
+                      "bg-blue-100 text-blue-700"
+                    }`}>
+                      {recommendation.status === "reading" ? "📖 在读" :
+                       recommendation.status === "archived" ? "📦 归档" : "✨ 新"}
+                    </span>
+                  )}
+                  {recommendation.quality_score > 0 && (
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                      recommendation.quality_score >= 9 ? "bg-red-100 text-red-700" :
+                      recommendation.quality_score >= 7 ? "bg-orange-100 text-orange-700" :
+                      recommendation.quality_score >= 5 ? "bg-blue-100 text-blue-700" :
+                      "bg-gray-100 text-gray-600"
+                    }`}>
+                      ⭐ {recommendation.quality_score}/10
+                    </span>
+                  )}
+                  {recommendation.source_name && <span>{recommendation.source_name}</span>}
+                  {recommendation.publish_date && <span>{recommendation.publish_date}</span>}
+                  {recommendation.word_count > 0 && <span>{recommendation.word_count} 字</span>}
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}

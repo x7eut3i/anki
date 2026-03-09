@@ -135,20 +135,31 @@ class ImportExportService:
         all_cards: list[dict] = []
         errors: list[str] = []
 
-        # Get max_retries and concurrency from AI config
+        # Get AI config for _ai_call_with_retry (RPM, fallback model, etc.)
         from app.models.ai_config import AIConfig
         ai_cfg = self.session.exec(
             select(AIConfig).where(AIConfig.is_enabled == True)
         ).first()
         max_retries = getattr(ai_cfg, "max_retries", 3) or 3
-        import_concurrency = getattr(ai_cfg, "import_concurrency", 3) or 3
+
+        # Build API request parameters (reused by _ai_call_with_retry)
+        api_url = f"{ai_cfg.api_base_url.rstrip('/')}/chat/completions"
+        api_headers = {
+            "Authorization": f"Bearer {ai_cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+        ai_model = getattr(ai_cfg, "model_pipeline", "") or ai_cfg.model
+        ai_temperature = getattr(ai_cfg, "temperature", 0.2) or 0.2
+        ai_max_tokens = getattr(ai_cfg, "max_tokens", 8192) or 8192
 
         logger.debug(f"AI import: processing {len(batches)} batch(es), "
-                     f"max_retries={max_retries}, concurrency={import_concurrency}")
+                     f"max_retries={max_retries}")
 
         import asyncio as _aio
+        from app.services.ai_pipeline import _ai_call_with_retry, _extract_ai_content
+        from app.services.ai_logger import log_ai_request, log_ai_response, log_ai_call_to_db
+        import time as _time
 
-        sem = _aio.Semaphore(import_concurrency)
         results_lock = _aio.Lock()
 
         async def _process_batch(i: int, batch: list[str]):
@@ -173,46 +184,54 @@ class ImportExportService:
                 },
             ]
 
-            batch_cards = None
-            last_error = None
+            payload = {
+                "model": ai_model,
+                "messages": messages,
+                "temperature": ai_temperature,
+                "max_tokens": ai_max_tokens,
+            }
 
-            async with sem:
-                for attempt in range(max_retries):
-                    try:
-                        result = await ai.chat_completion(
-                            messages, temperature=0.2, feature="import"
-                        )
-                        content = result["content"]
-                        from app.services.json_repair import repair_json, robust_json_parse
-                        content = repair_json(content)
-                        parsed = robust_json_parse(content)
-                        if parsed is None:
-                            raise ValueError("AI返回的JSON格式错误，且修复失败")
+            try:
+                log_ai_request("import", ai_model, messages, ai_temperature, ai_max_tokens)
+                t0 = _time.time()
+                result = await _ai_call_with_retry(
+                    api_url, payload, api_headers,
+                    max_retries=max_retries,
+                    timeout=120.0,
+                    feature="import",
+                    config=ai_cfg,
+                )
+                elapsed_ms = int((_time.time() - t0) * 1000)
+                content = _extract_ai_content(result)
+                tokens_used = result.get("usage", {}).get("total_tokens", 0)
+                log_ai_response("import", ai_model, content, tokens_used, elapsed_ms)
+                log_ai_call_to_db(
+                    feature="import", model=ai_model,
+                    tokens_used=tokens_used, elapsed_ms=elapsed_ms,
+                    user_id=self.user_id,
+                )
 
-                        if isinstance(parsed, dict):
-                            batch_cards = parsed.get("cards", [])
-                        elif isinstance(parsed, list):
-                            batch_cards = parsed
-                        else:
-                            raise ValueError("AI返回的JSON格式不正确")
+                from app.services.json_repair import repair_json, robust_json_parse
+                content = repair_json(content)
+                parsed = robust_json_parse(content)
+                if parsed is None:
+                    raise ValueError("AI返回的JSON格式错误，且修复失败")
 
-                        last_error = None
-                        break
-                    except Exception as e:
-                        last_error = str(e)
-                        logger.warning(f"AI import: batch {i + 1} attempt {attempt + 1}/{max_retries} failed: {e}")
-                        if attempt < max_retries - 1:
-                            await _aio.sleep(2 * (attempt + 1))
-
-            async with results_lock:
-                if last_error or batch_cards is None:
-                    logger.error(f"AI import: batch {i + 1} failed after {max_retries} retries: {last_error}")
-                    errors.append(f"批次{i + 1}解析失败: {str(last_error)[:100]}")
+                if isinstance(parsed, dict):
+                    batch_cards = parsed.get("cards", [])
+                elif isinstance(parsed, list):
+                    batch_cards = parsed
                 else:
+                    raise ValueError("AI返回的JSON格式不正确")
+
+                async with results_lock:
                     all_cards.extend(batch_cards)
                     logger.debug(f"AI import: batch {i + 1} returned {len(batch_cards)} cards")
+            except Exception as e:
+                logger.error(f"AI import: batch {i + 1} failed: {e}")
+                async with results_lock:
+                    errors.append(f"批次{i + 1}解析失败: {str(e)[:100]}")
 
-        # Launch all batch tasks concurrently (semaphore limits parallelism)
         batch_tasks = [_process_batch(i, batch) for i, batch in enumerate(batches)]
         await _aio.gather(*batch_tasks)
 

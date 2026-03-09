@@ -235,7 +235,7 @@ async def _ai_call_with_retry(
                 if config:
                     try:
                         resp_text = resp.text
-                        if "配额已用尽" in resp_text:
+                        if len(resp_text) < 100 and "配额已用尽" in resp_text:
                             fallback_name = _activate_fallback(config, "配额已用尽")
                             if fallback_name and payload.get("model") != fallback_name:
                                 payload = {**payload, "model": fallback_name}
@@ -273,10 +273,18 @@ async def _ai_call_with_retry(
         except Exception as err:
             last_error = err
 
-            # Check if this is an HTTP error that warrants fallback activation
-            if config and isinstance(err, httpx.HTTPStatusError):
+            # Build a descriptive error string including HTTP status + body
+            err_detail = ""
+            if isinstance(err, httpx.HTTPStatusError):
                 status_code = err.response.status_code
-                if status_code in (429, 500, 502, 503, 529):
+                try:
+                    body_text = err.response.text[:500]
+                except Exception:
+                    body_text = "(unreadable)"
+                err_detail = f"HTTP {status_code}: {body_text}"
+
+                # Check if this is an error that warrants fallback activation
+                if config and status_code in (429, 500, 502, 503, 529):
                     fallback_name = _activate_fallback(config, f"HTTP {status_code}")
                     if fallback_name and payload.get("model") != fallback_name:
                         payload = {**payload, "model": fallback_name}
@@ -284,12 +292,14 @@ async def _ai_call_with_retry(
                             "%s: activated fallback model %s after HTTP %d",
                             feature, fallback_name, status_code,
                         )
+            else:
+                err_detail = f"{type(err).__name__}: {err}" if str(err) else type(err).__name__
 
             if attempt < max_retries - 1:
-                logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err)
+                logger.warning("%s attempt %d/%d failed: %s", feature, attempt + 1, max_retries, err_detail)
                 await asyncio.sleep(2 * (attempt + 1))
             else:
-                logger.error("%s failed after %d attempts: %s", feature, max_retries, err)
+                logger.error("%s failed after %d attempts: %s", feature, max_retries, err_detail)
         finally:
             # Release RPM slot after each attempt so the next attempt
             # re-acquires and respects the sliding-window rate limit.
@@ -575,6 +585,7 @@ async def ai_generate_cards(
     content_text = None
     last_error = None
     last_raw_response = ""
+    cards_data: list[dict] = []
 
     for attempt in range(max_retries):
         try:
@@ -617,19 +628,24 @@ async def ai_generate_cards(
             last_error = None
             break
         except Exception as e:
-            last_error = str(e)
-            last_raw_response = content_text if content_text else str(e)
-            logger.warning("card_generation attempt %d/%d failed: %s", attempt + 1, max_retries, e)
+            last_error = e
+            last_raw_response = content_text if content_text else ""
+            err_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.warning("card_generation attempt %d/%d failed: %s", attempt + 1, max_retries, err_detail)
         if attempt < max_retries - 1:
             await asyncio.sleep(2 * (attempt + 1))
 
-    if last_error or content_text is None:
-        logger.error("Card generation failed after retries: %s", last_error)
-        log_ai_response("card_generation", model, last_raw_response, error=str(last_error))
+    if last_error is not None or content_text is None:
+        err_msg = ""
+        if last_error is not None:
+            err_msg = f"{type(last_error).__name__}: {last_error}" if str(last_error) else type(last_error).__name__
+        logger.error("Card generation failed after %d retries: %s (raw_response=%s)",
+                     max_retries, err_msg, last_raw_response[:300] if last_raw_response else "(none)")
+        log_ai_response("card_generation", model, last_raw_response, error=err_msg)
         log_ai_call_to_db(
             feature="card_generation", model=model,
             config_name=config.name, status="error",
-            error_message=str(last_error), input_preview=title[:200],
+            error_message=err_msg, input_preview=title[:200],
             user_id=user_id, source=source,
             raw_response=last_raw_response,
         )

@@ -90,6 +90,7 @@ class QuizService:
             quiz_time_limit=time_limit,
             remaining_card_ids=json.dumps(card_ids),
             quiz_answer_map=json.dumps(answer_map) if answer_map else "{}",
+            quiz_questions=json.dumps(questions, ensure_ascii=False),
         )
         self.session.add(session_obj)
         self.session.commit()

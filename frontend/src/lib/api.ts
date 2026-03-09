@@ -178,14 +178,23 @@ export const review = {
   answer: (data: { card_id: number; rating: number; review_duration_ms?: number }, token: string) =>
     request<any>("/api/review/answer", { method: "POST", body: JSON.stringify(data), token }),
 
+  batchAnswer: (data: { card_id: number; rating: number; review_duration_ms?: number }[], token: string, sessionId?: number | null) =>
+    request<any>("/api/review/batch-answer", { method: "POST", body: JSON.stringify({ answers: data, session_id: sessionId || null }), token }),
+
   preview: (cardId: number, token: string) =>
     request<any>(`/api/review/preview/${cardId}`, { token }),
+
+  batchPreview: (cardIds: number[], token: string) =>
+    request<Record<string, any>>("/api/review/preview/batch", { method: "POST", body: JSON.stringify({ card_ids: cardIds }), token }),
 
   createSession: (data: any, token: string) =>
     request<any>("/api/review/session", { method: "POST", body: JSON.stringify(data), token }),
 
   getActiveSession: (token: string) =>
     request<any>("/api/review/session/active", { token }),
+
+  getActiveQuizSession: (token: string) =>
+    request<any>("/api/review/session/active?mode=quiz", { token }),
 
   updateProgress: (sessionId: number, cardId: number, isCorrect: boolean, token: string) =>
     request<any>(`/api/review/session/${sessionId}/progress`, {
@@ -211,6 +220,9 @@ export const quiz = {
 
   submit: (sessionId: number, answers: any[], token: string) =>
     request<any>(`/api/quiz/submit/${sessionId}`, { method: "POST", body: JSON.stringify(answers), token }),
+
+  save: (sessionId: number, data: { answers: Record<string, any>; current_q: number }, token: string) =>
+    request<any>(`/api/quiz/save/${sessionId}`, { method: "POST", body: JSON.stringify(data), token }),
 };
 
 // ---------------------------------------------------------------------------
@@ -389,6 +401,12 @@ export const reading = {
 
   get: (id: number, token: string) =>
     request<any>(`/api/reading/${id}`, { token }),
+
+  dailyRecommendation: (token: string) =>
+    request<any>("/api/reading/daily-recommendation", { token }),
+
+  batchLookup: (sourceUrls: string[], token: string) =>
+    request<Record<string, { id: number; title: string; quality_score: number; source_name: string }>>("/api/reading/batch-lookup", { method: "POST", body: JSON.stringify({ source_urls: sourceUrls }), token }),
 
   create: (data: { title: string; content: string; source_url?: string; source_name?: string; publish_date?: string; create_cards?: boolean }, token: string) =>
     request<any>("/api/reading", { method: "POST", body: JSON.stringify(data), token }),

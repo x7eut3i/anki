@@ -40,7 +40,6 @@ interface ConfigProfile {
   rpm_limit: number;
   max_daily_calls: number;
   import_batch_size: number;
-  import_concurrency: number;
   max_tokens: number;
   temperature: number;
   max_retries: number;
@@ -69,7 +68,6 @@ export default function AIPage() {
   const [modelReading, setModelReading] = useState("");
   const [maxCalls, setMaxCalls] = useState(100);
   const [importBatchSize, setImportBatchSize] = useState(30);
-  const [importConcurrency, setImportConcurrency] = useState(3);
   const [maxTokens, setMaxTokens] = useState(8192);
   const [temperature, setTemperature] = useState(0.3);
   const [maxRetries, setMaxRetries] = useState(3);
@@ -123,7 +121,6 @@ export default function AIPage() {
     setModel(p.model || "");
     setMaxCalls(p.max_daily_calls || 100);
     setImportBatchSize(p.import_batch_size || 30);
-    setImportConcurrency(p.import_concurrency || 3);
     setMaxTokens(p.max_tokens || 8192);
     setTemperature(p.temperature ?? 0.3);
     setMaxRetries(p.max_retries ?? 3);
@@ -203,7 +200,6 @@ export default function AIPage() {
         model: model,
         max_daily_calls: maxCalls,
         import_batch_size: importBatchSize,
-        import_concurrency: importConcurrency,
         max_tokens: maxTokens,
         temperature: temperature,
         max_retries: maxRetries,
@@ -543,18 +539,6 @@ export default function AIPage() {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 AI 智能导入时每批处理的行数，切换配置时此值随之变化
-              </p>
-            </div>
-            <div>
-              <label className="text-sm font-medium">导入并发数</label>
-              <Input
-                type="number"
-                value={importConcurrency}
-                onChange={(e) => setImportConcurrency(parseInt(e.target.value) || 3)}
-                min={1}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                AI 智能导入时同时处理的批次数量，增大可提高导入速度。默认 3
               </p>
             </div>
             <div>

@@ -273,18 +273,17 @@ class TestCardFromSelectionPreview:
 class TestIngestionConfigFields:
     """Tests for new ingestion config fields (cron_expression, concurrency)."""
 
-    def test_update_cron_and_concurrency(
+    def test_update_cron_expression(
         self,
         client: TestClient,
         admin_headers: dict,
     ):
-        """PATCH ingestion config should accept cron_expression and concurrency."""
+        """PATCH ingestion config should accept cron_expression."""
         resp = client.patch(
             "/api/ingestion/config",
-            json={"cron_expression": "0 6 * * *", "concurrency": 3},
+            json={"cron_expression": "0 6 * * *"},
             headers=admin_headers,
         )
         if resp.status_code == 200:
             data = resp.json()
             assert data["cron_expression"] == "0 6 * * *"
-            assert data["concurrency"] == 3

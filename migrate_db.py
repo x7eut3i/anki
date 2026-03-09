@@ -28,6 +28,7 @@ def migrate(db_path: str):
     migrations = [
         ("cards", "meta_info", "TEXT DEFAULT ''"),
         ("study_sessions", "quiz_answer_map", "TEXT DEFAULT '{}'"),
+        ("study_sessions", "current_question", "INTEGER DEFAULT 0"),
     ]
 
     applied = 0

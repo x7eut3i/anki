@@ -112,6 +112,8 @@ def list_analyses(
         sort_column = col(ArticleAnalysis.quality_score)
     elif sort_by == "word_count":
         sort_column = col(ArticleAnalysis.word_count)
+    elif sort_by == "last_read_at":
+        sort_column = col(ArticleAnalysis.last_read_at)
 
     if sort_dir == "asc":
         query = query.order_by(sort_column.asc())
@@ -172,11 +174,86 @@ def list_analyses(
             "is_starred": item.is_starred,
             "created_at": item.created_at.isoformat(),
             "updated_at": item.updated_at.isoformat(),
+            "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
             "tags_list": article_tag_map.get(item.id, []),
             "card_count": card_count_map.get(item.source_url, 0),
         })
 
     return {"items": result, "total": total, "page": page, "page_size": page_size, "source_names": source_names}
+
+
+@router.get("/daily-recommendation")
+def daily_recommendation(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return a deterministic daily article recommendation.
+
+    Uses today's date as hash seed so the same article is shown all day.
+    Tries quality >= 8.5, then >= 7.5, then any non-archived article.
+    """
+    from datetime import date
+    import hashlib
+
+    for min_score in (8.5, 7.5, 0):
+        query = (
+            select(ArticleAnalysis.id, ArticleAnalysis.title,
+                   ArticleAnalysis.source_name, ArticleAnalysis.quality_score,
+                   ArticleAnalysis.word_count, ArticleAnalysis.publish_date,
+                   ArticleAnalysis.status)
+            .where(ArticleAnalysis.status != "archived")
+        )
+        if min_score > 0:
+            query = query.where(ArticleAnalysis.quality_score >= min_score)
+        articles = session.exec(query).all()
+        if articles:
+            break
+
+    if not articles:
+        return {"id": None, "title": None}
+
+    seed = int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16)
+    pick = articles[seed % len(articles)]
+    return {
+        "id": pick[0],
+        "title": pick[1],
+        "source_name": pick[2],
+        "quality_score": pick[3],
+        "word_count": pick[4],
+        "publish_date": pick[5],
+        "status": pick[6],
+    }
+
+
+@router.post("/batch-lookup")
+def batch_lookup_by_urls(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Batch lookup articles by source URLs.
+
+    Accepts: { "source_urls": ["url1", "url2", ...] }
+    Returns: { "url1": { "id": 1, "title": "...", "quality_score": 8.5, "source_name": "..." }, ... }
+    """
+    source_urls = data.get("source_urls", [])
+    if not source_urls:
+        return {}
+    # Limit to 200 URLs
+    source_urls = source_urls[:200]
+    items = session.exec(
+        select(ArticleAnalysis).where(col(ArticleAnalysis.source_url).in_(source_urls))
+    ).all()
+    result: dict[str, dict] = {}
+    for item in items:
+        if item.source_url and item.source_url not in result:
+            result[item.source_url] = {
+                "id": item.id,
+                "title": item.title,
+                "quality_score": item.quality_score,
+                "source_name": item.source_name or "",
+            }
+    return result
 
 
 @router.get("/{analysis_id}")
@@ -186,9 +263,15 @@ def get_analysis(
     session: Session = Depends(get_session),
 ):
     """Get full article analysis detail."""
+    from datetime import datetime, timezone
     item = session.get(ArticleAnalysis, analysis_id)
     if not item:
         raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Track last read time
+    item.last_read_at = datetime.now(timezone.utc)
+    session.add(item)
+    session.commit()
 
     # Parse analysis_json for structured access
     analysis_data = {}
@@ -215,6 +298,7 @@ def get_analysis(
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
         "finished_at": item.finished_at.isoformat() if item.finished_at else None,
+        "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
     }
 
 
@@ -514,7 +598,11 @@ async def _bg_repair_articles_async(
     reanalyze_ids: list[int],
     cards_only_ids: list[int],
 ):
-    """Async implementation for batch repair with concurrency."""
+    """Async implementation for batch repair.
+
+    Processes articles concurrently — each task gets its own DB session
+    so SQLite is never accessed concurrently from the same connection.
+    """
     import asyncio as _asyncio
     from app.database import engine
     from app.routers.ai_jobs import update_job_status
@@ -529,113 +617,115 @@ async def _bg_repair_articles_async(
 
     update_job_status(job_id, "running", progress=5)
 
-    with Session(engine) as session:
-        config = session.get(AIConfig, config_id)
-        if not config:
-            update_job_status(job_id, "failed", error_message="AI配置不存在")
-            return
+    state_lock = _asyncio.Lock()
 
-        # Use concurrency from IngestionConfig (same as source management)
-        from app.models.ingestion import IngestionConfig
-        ing_cfg = session.exec(select(IngestionConfig)).first()
-        concurrency = getattr(ing_cfg, "concurrency", 3) if ing_cfg else 3
-        concurrency = concurrency or 3
+    # Read rpm_limit once for semaphore sizing
+    with Session(engine) as _init_session:
+        _init_config = _init_session.get(AIConfig, config_id)
+        _rpm = (_init_config.rpm_limit if _init_config else 0) or 0
+    _concurrency = max(_rpm * 2, 8)
 
-        sem = _asyncio.Semaphore(concurrency)
-        state_lock = _asyncio.Lock()
-
+    try:
         async def _repair_one(aid: int, needs_analysis: bool):
             nonlocal success_analyze, success_cards, failed_count, processed
-
-            async with sem:
-                try:
-                    async with state_lock:
-                        article = session.get(ArticleAnalysis, aid)
-                    if not article:
+            try:
+                with Session(engine) as task_session:
+                    config = task_session.get(AIConfig, config_id)
+                    article = task_session.get(ArticleAnalysis, aid)
+                    if not config or not article:
                         async with state_lock:
                             failed_count += 1
                             processed += 1
                         return
 
+                    art_title = article.title
+                    art_content = article.content
+                    art_source_url = article.source_url or ""
+
                     if needs_analysis:
-                        # Re-run AI analysis
                         analysis_data = await ai_analyze_article(
-                            session, config,
-                            title=article.title, content=article.content,
-                            user_id=user_id,
-                            source="reading",
+                            task_session, config,
+                            title=art_title, content=art_content,
+                            user_id=user_id, source="reading",
                         )
 
                         if analysis_data:
+                            article.analysis_html = _build_analysis_html(art_title, analysis_data)
+                            article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
+                            article.quality_score = analysis_data.get("quality_score", 0)
+                            article.quality_reason = analysis_data.get("quality_reason", "")
+                            article.updated_at = dt_.now(tz_.utc)
+                            task_session.add(article)
+                            task_session.commit()
                             async with state_lock:
-                                article.analysis_html = _build_analysis_html(article.title, analysis_data)
-                                article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
-                                article.quality_score = analysis_data.get("quality_score", 0)
-                                article.quality_reason = analysis_data.get("quality_reason", "")
-                                article.updated_at = dt_.now(tz_.utc)
-                                session.add(article)
-                                session.commit()
                                 success_analyze += 1
 
-                            # Also generate cards for re-analyzed articles
                             try:
                                 cards_created, _ = await ai_generate_cards(
-                                    session, config,
-                                    title=article.title,
-                                    content=article.content,
-                                    source_url=article.source_url or "",
-                                    user_id=user_id,
-                                    source="reading",
+                                    task_session, config,
+                                    title=art_title, content=art_content,
+                                    source_url=art_source_url,
+                                    user_id=user_id, source="reading",
                                 )
-                                if cards_created > 0:
-                                    async with state_lock:
-                                        success_cards += cards_created
+                                async with state_lock:
+                                    success_cards += cards_created
                             except Exception as e:
                                 logger.warning("Card generation failed during repair for article %d: %s", aid, e)
                         else:
                             async with state_lock:
                                 failed_count += 1
                     else:
-                        # Cards-only: generate cards for articles that have analysis but no cards
-                        cards_created, _ = await ai_generate_cards(
-                            session, config,
-                            title=article.title,
-                            content=article.content,
-                            source_url=article.source_url or "",
-                            user_id=user_id,
-                            source="reading",
-                        )
-                        if cards_created > 0:
+                        # Cards-only
+                        try:
+                            cards_created, _ = await ai_generate_cards(
+                                task_session, config,
+                                title=art_title, content=art_content,
+                                source_url=art_source_url,
+                                user_id=user_id, source="reading",
+                            )
                             async with state_lock:
-                                success_cards += cards_created
-                                success_analyze += 1
-                        else:
+                                if cards_created > 0:
+                                    success_cards += cards_created
+                                    success_analyze += 1
+                                else:
+                                    failed_count += 1
+                        except Exception as e:
+                            logger.error("Card generation failed for article %d: %s", aid, e)
                             async with state_lock:
                                 failed_count += 1
-                except Exception as e:
-                    logger.error("Repair failed for article %d: %s", aid, e)
-                    async with state_lock:
-                        failed_count += 1
-                finally:
-                    async with state_lock:
-                        processed += 1
-                        progress = int(5 + (processed / total) * 90)
-                    update_job_status(job_id, "running", progress=progress)
+            except Exception as e:
+                logger.error("Repair failed for article %d: %s", aid, e, exc_info=True)
+                async with state_lock:
+                    failed_count += 1
+            finally:
+                async with state_lock:
+                    processed += 1
+                    progress = int(5 + (processed / total) * 90)
+                update_job_status(job_id, "running", progress=progress)
 
-        # Build task list: re-analyze + cards-only
-        tasks = [_repair_one(aid, True) for aid in reanalyze_ids] + \
-                [_repair_one(aid, False) for aid in cards_only_ids]
+        _sem = _asyncio.Semaphore(_concurrency)
+
+        async def _throttled(aid: int, do_analyze: bool):
+            async with _sem:
+                await _repair_one(aid, do_analyze)
+
+        tasks = [_throttled(aid, True) for aid in reanalyze_ids] + \
+                [_throttled(aid, False) for aid in cards_only_ids]
         await _asyncio.gather(*tasks)
 
-    # Final status
-    result_msg = f"修复完成: {success_analyze} 篇成功, {failed_count} 篇失败, 共生成 {success_cards} 张卡片"
-    update_job_status(job_id, "completed", progress=100,
-                      result_json=json.dumps({
-                          "success_articles": success_analyze,
-                          "failed": failed_count,
-                          "cards_created": success_cards,
-                          "message": result_msg,
-                      }))
+        # Final status
+        result_msg = f"修复完成: {success_analyze} 篇成功, {failed_count} 篇失败, 共生成 {success_cards} 张卡片"
+        update_job_status(job_id, "completed", progress=100,
+                          result_json=json.dumps({
+                              "success_articles": success_analyze,
+                              "failed": failed_count,
+                              "cards_created": success_cards,
+                              "message": result_msg,
+                          }))
+    except Exception as e:
+        logger.error("Batch repair crashed: %s", e, exc_info=True)
+        update_job_status(job_id, "failed",
+                          error_message=f"修复任务异常终止: {type(e).__name__}: {e}")
 
 
 @router.post("/batch-delete")

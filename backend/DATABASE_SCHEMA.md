@@ -248,6 +248,7 @@
 | created_at | datetime | default utcnow |
 | updated_at | datetime | default utcnow |
 | deleted_at | datetime | nullable |
+| last_read_at | datetime | nullable, auto-updated on read |
 
 ---
 

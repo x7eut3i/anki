@@ -40,8 +40,7 @@ const CATEGORY_FIELDS: Record<string, { key: string; label: string; required?: b
     { key: "back", label: "关键词", placeholder: "被挖空的关键词" },
   ],
   "古诗词名句": [
-    { key: "front", label: "诗句（挖空）", required: true, placeholder: "诗句填空" },
-    { key: "back", label: "答案", placeholder: "被挖空的词/句" },
+    { key: "front", label: "诗词名", required: true, placeholder: "输入诗词名（如：静夜思、登鹳雀楼），AI将自动生成多张填空卡片" },
   ],
 };
 
@@ -193,10 +192,10 @@ export default function CreateCardsPage() {
           { cards: cardsData, deck_id: selectedDeckId, category_id: catId, allow_correction: aiRefine },
           token
         );
-        showToast(
-          `✅ 已提交 ${cardsData.length} 张卡片，AI 正在后台补全内容并创建卡片。可在「AI 统计」页查看进度。`,
-          "success"
-        );
+        const toastMsg = catName === "古诗词名句"
+          ? `✅ 已提交 ${cardsData.length} 首诗词，AI 正在后台为每首诗生成多张填空卡片。可在「AI 统计」页查看进度。`
+          : `✅ 已提交 ${cardsData.length} 张卡片，AI 正在后台补全内容并创建卡片。可在「AI 统计」页查看进度。`;
+        showToast(toastMsg, "success");
         // Clear submitted drafts
         setDrafts([newDraft(nextId)]);
         setNextId((n) => n + 1);
@@ -291,7 +290,9 @@ export default function CreateCardsPage() {
           {selectedDeckCatName && (
             <p className="text-xs text-muted-foreground mt-2">
               <Sparkles className="inline h-3 w-3 mr-1" />
-              检测到分类「{selectedDeckCatName}」，已调整输入项。提交后 AI 将自动补充完整内容。
+              {selectedDeckCatName === "古诗词名句"
+                ? "检测到分类「古诗词名句」。每行输入一个诗词名，AI 会自动为每首诗生成多张填空卡片。"
+                : `检测到分类「${selectedDeckCatName}」，已调整输入项。提交后 AI 将自动补充完整内容。`}
             </p>
           )}
         </CardContent>

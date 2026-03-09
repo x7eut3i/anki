@@ -539,6 +539,13 @@ export default function DecksPage() {
                   <span className="font-medium">{deck.card_count || 0}</span>{" "}
                   张卡片
                 </p>
+                {(deck.card_count > 0) && (
+                  <div className="flex gap-3 mt-1.5 text-xs text-muted-foreground">
+                    <span className="text-blue-600">待学 {deck.new_count ?? 0}</span>
+                    <span className="text-amber-600">学习中 {deck.learning_count ?? 0}</span>
+                    <span className="text-green-600">已掌握 {deck.mastered_count ?? 0}</span>
+                  </div>
+                )}
               </CardContent>
               <CardFooter className="pt-0">
                 <Link

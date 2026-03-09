@@ -36,3 +36,10 @@ class StudySession(SQLModel, table=True):
 
     # Dynamic question answer map: JSON {"question_id": "correct_answer", ...}
     quiz_answer_map: str = Field(default="{}")
+
+    # Quiz questions data: JSON array of question objects (for session recovery)
+    quiz_questions: str = Field(default="[]")
+    # Quiz user answers: JSON {"question_id": {"card_id": N, "answer": "X"}, ...}
+    quiz_user_answers: str = Field(default="{}")
+    # Current question index for quiz resume
+    current_question: int = Field(default=0)

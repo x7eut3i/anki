@@ -50,8 +50,6 @@ def _migrate_add_columns():
         ("ai_configs", "max_tokens", "INTEGER DEFAULT 8192"),
         ("ai_configs", "temperature", "REAL DEFAULT 0.3"),
         ("ingestion_configs", "cron_expression", "TEXT DEFAULT ''"),
-        ("ingestion_configs", "concurrency", "INTEGER DEFAULT 3"),
-        ("ai_configs", "import_concurrency", "INTEGER DEFAULT 3"),
         ("ai_configs", "fallback_model", "TEXT DEFAULT ''"),
         ("ai_configs", "fallback_cooldown", "INTEGER DEFAULT 600"),
         ("ai_configs", "rpm_limit", "INTEGER DEFAULT 0"),
@@ -67,6 +65,7 @@ def _migrate_add_columns():
         ("ai_interaction_logs", "source", "TEXT DEFAULT ''"),
         ("ai_interaction_logs", "raw_response", "TEXT DEFAULT ''"),
         ("study_sessions", "all_card_ids", "TEXT DEFAULT '[]'"),
+        ("article_analyses", "last_read_at", "TIMESTAMP"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuthStore, useStudyStore } from "@/lib/store";
-import { review, auth } from "@/lib/api";
+import { review, auth, tags as tagsApi } from "@/lib/api";
 import Flashcard from "@/components/flashcard";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -42,12 +42,18 @@ export default function StudyPage() {
   } = useStudyStore();
 
   const [loading, setLoading] = useState(true);
-  const [preview, setPreview] = useState<any>(null);
   const [completed, setCompleted] = useState(false);
   const [reviewedCount, setReviewedCount] = useState(0);
   const [pendingSession, setPendingSession] = useState<any>(null);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [cardStartTime, setCardStartTime] = useState<number>(Date.now());
+
+  // Buffered answers for batch submission
+  const [bufferedAnswers, setBufferedAnswers] = useState<{ card_id: number; rating: number; review_duration_ms?: number }[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // All tags cache — fetched once at page load
+  const [allTagsCache, setAllTagsCache] = useState<any[]>([]);
 
   // Question type config (persisted on user profile)
   const [showTypeConfig, setShowTypeConfig] = useState(false);
@@ -76,6 +82,7 @@ export default function StudyPage() {
     });
     setForceTypeMap(map);
   }, [questionMode, customRatio]);
+
 
   // Check for an unfinished session first (exclude quiz sessions)
   const checkActiveSession = useCallback(async () => {
@@ -238,13 +245,17 @@ export default function StudyPage() {
     const init = async () => {
       const wantsResume = params.get("resume") === "1";
 
-      // Load user study preferences from server
+      // Load user study preferences and all tags in parallel
       if (token && !settingsLoaded) {
         try {
-          const me = await auth.me(token);
+          const [me, tagsList] = await Promise.all([
+            auth.me(token),
+            tagsApi.list(token).catch(() => []),
+          ]);
           if (me.study_question_mode) setQuestionMode(me.study_question_mode);
           if (me.study_custom_ratio != null) setCustomRatio(me.study_custom_ratio);
           setSettingsLoaded(true);
+          setAllTagsCache(tagsList);
         } catch { /* use defaults */ }
       }
 
@@ -276,44 +287,94 @@ export default function StudyPage() {
     return () => reset();
   }, []);
 
-  // Load preview for current card & reset timer
+  // Auto-flush when all cards completed
+  const completedFlushRef = useRef(false);
   useEffect(() => {
-    if (!token || !currentCards[currentIndex]) return;
-    setCardStartTime(Date.now());
-    review
-      .preview(currentCards[currentIndex].id, token)
-      .then(setPreview)
-      .catch(() => setPreview(null));
-  }, [token, currentCards, currentIndex]);
+    if (completed && bufferedAnswers.length > 0 && !completedFlushRef.current) {
+      completedFlushRef.current = true;
+      flushAnswers();
+    }
+  }, [completed, bufferedAnswers.length]);
 
-  const handleRate = async (rating: number) => {
-    if (!token) return;
+  // Reset timer when card changes
+  useEffect(() => {
+    if (!currentCards[currentIndex]) return;
+    setCardStartTime(Date.now());
+  }, [currentCards, currentIndex]);
+
+  // --- Auto-save flag to prevent double-fire ---
+  const autoSaveFiredRef = useRef(false);
+
+  // Flush buffered answers to server in one batch
+  const flushAnswers = useCallback(async (answers?: typeof bufferedAnswers) => {
+    const toFlush = answers || bufferedAnswers;
+    if (toFlush.length === 0 || !token) return;
+    autoSaveFiredRef.current = true; // Prevent auto-save from duplicating
+    setIsSaving(true);
+    try {
+      await review.batchAnswer(toFlush, token, sessionId);
+    } catch (err) {
+      console.error("Batch submit failed, falling back to single:", err);
+      for (const a of toFlush) {
+        try { await review.answer(a, token); } catch {}
+      }
+    }
+    if (!answers) setBufferedAnswers([]);
+    setIsSaving(false);
+    autoSaveFiredRef.current = false; // Allow future auto-saves for new answers
+  }, [bufferedAnswers, token, sessionId]);
+
+  // --- Auto-save on page leave ---
+  const autoSaveStudyRef = useRef<() => void>();
+  autoSaveStudyRef.current = () => {
+    if (autoSaveFiredRef.current) return;
+    if (!token || bufferedAnswers.length === 0) return;
+    autoSaveFiredRef.current = true;
+    // Use fetch with keepalive for reliability during page unload
+    fetch("/api/review/batch-answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ answers: bufferedAnswers, session_id: sessionId }),
+      keepalive: true,
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    const handleBeforeUnload = () => autoSaveStudyRef.current?.();
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      // Save on unmount (SPA route change)
+      autoSaveStudyRef.current?.();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
+
+  const handleRate = (rating: number) => {
     const card = currentCards[currentIndex];
     const durationMs = Math.min(Date.now() - cardStartTime, 600000); // cap at 10 min
     const wasAlreadyReviewed = reviewedIndices.has(currentIndex);
-    try {
-      await review.answer({ card_id: card.id, rating, review_duration_ms: durationMs }, token);
-      markReviewed(currentIndex);
 
-      if (!wasAlreadyReviewed) {
-        setReviewedCount((c) => c + 1);
+    // Pure local operation — no network calls
+    const answerData = { card_id: card.id, rating, review_duration_ms: durationMs };
+    setBufferedAnswers(prev => {
+      const filtered = prev.filter(a => a.card_id !== card.id);
+      return [...filtered, answerData];
+    });
 
-        // Advance immediately — no await in between to prevent flash
-        if (currentIndex + 1 < currentCards.length) {
-          nextCard();
-        } else {
-          setCompleted(true);
-        }
+    markReviewed(currentIndex);
 
-        // Fire-and-forget session progress update
-        if (sessionId) {
-          review.updateProgress(sessionId, card.id, rating >= 3, token).catch(() => {});
-        }
+    if (!wasAlreadyReviewed) {
+      setReviewedCount((c) => c + 1);
+
+      if (currentIndex + 1 < currentCards.length) {
+        nextCard();
+      } else {
+        setCompleted(true);
       }
-      // Re-rating: stay on current card, don't update session progress
-    } catch (err) {
-      console.error("Review failed:", err);
     }
+    // Re-rating: stay on current card
   };
 
   // Swipe hook MUST be called unconditionally (Rules of Hooks — before any early return)
@@ -486,9 +547,18 @@ export default function StudyPage() {
           </Button>
         </Link>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={() => flushAnswers()}
+            disabled={isSaving || bufferedAnswers.length === 0}
+            variant="outline"
+            size="lg"
+            className="text-base h-10 px-5 font-medium bg-green-50 hover:bg-green-100 text-green-700 border-green-300 dark:bg-green-950/30 dark:hover:bg-green-950/50 dark:text-green-400 dark:border-green-800"
+          >
+            {isSaving ? "保存中..." : `💾 暂存 (${reviewedCount}/${currentCards.length})`}
+          </Button>
           {isCurrentReviewed && (
             <span className="text-xs text-green-600 bg-green-50 dark:bg-green-950/30 px-2 py-0.5 rounded-full">
-              ✅ 已评分 · 可重新评分
+              ✅ 已评分
             </span>
           )}
           <span className="text-sm text-muted-foreground">
@@ -518,13 +588,16 @@ export default function StudyPage() {
         showAnswer={showAnswer}
         onToggleAnswer={toggleAnswer}
         onRate={handleRate}
-        preview={preview}
+        preview={card.scheduling_preview}
         forceType={forceTypeMap[card.id]}
+        articleMap={card.source && card.article_id ? { [card.source]: { id: card.article_id, title: card.article_title, quality_score: card.article_quality_score, source_name: card.article_source_name } } : undefined}
         tagPanel={
           <CardTagManager
             cardId={card.id}
             token={token!}
             onTagsChange={(tags) => updateCurrentCard({ tags_list: tags })}
+            initialAllTags={allTagsCache.length > 0 ? allTagsCache : undefined}
+            initialCardTags={card.tags_list || []}
           />
         }
       />

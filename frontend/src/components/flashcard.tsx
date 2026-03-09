@@ -27,6 +27,7 @@ interface FlashcardProps {
   forceType?: "qa" | "choice";  // Override question type display regardless of distractors
   tagPanel?: React.ReactNode;  // Optional tag management panel to render inside
   readOnly?: boolean;  // If true, show answer but hide rating buttons (browsing history)
+  articleMap?: Record<string, { id: number; title: string; quality_score: number; source_name: string }>;  // Pre-loaded article info keyed by source URL
 }
 
 const RATING_LABELS = [
@@ -57,6 +58,7 @@ export default function Flashcard({
   forceType,
   tagPanel,
   readOnly = false,
+  articleMap,
 }: FlashcardProps) {
   const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
 
@@ -286,7 +288,7 @@ export default function Flashcard({
           {metaInfo && <MetaInfoPanel meta={metaInfo} />}
 
           {/* Article Source Link */}
-          {card.source && <ArticleSourceLink sourceUrl={card.source} />}
+          {card.source && <ArticleSourceLink sourceUrl={card.source} preloaded={articleMap?.[card.source]} />}
         </div>
       )}
 

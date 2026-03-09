@@ -8,6 +8,11 @@ class ReviewRequest(BaseModel):
     review_duration_ms: int = Field(default=0, ge=0)
 
 
+class BatchAnswerRequest(BaseModel):
+    answers: list[ReviewRequest]
+    session_id: int | None = None
+
+
 class ReviewResponse(BaseModel):
     card_id: int
     new_due: datetime
@@ -82,6 +87,9 @@ class StudySessionResponse(BaseModel):
     all_card_ids: str
     question_mode: str
     custom_ratio: int
+    quiz_questions: str = "[]"
+    quiz_user_answers: str = "{}"
+    current_question: int = 0
 
     model_config = {"from_attributes": True}
 

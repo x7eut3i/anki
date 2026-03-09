@@ -54,6 +54,13 @@ class CardResponse(BaseModel):
     is_suspended: bool = False
     # Tags (populated from CardTag junction)
     tags_list: list[dict] = []
+    # Article info (populated from ArticleAnalysis lookup by source URL)
+    article_id: int | None = None
+    article_title: str | None = None
+    article_quality_score: float | None = None
+    article_source_name: str | None = None
+    # Scheduling preview (next due interval per rating)
+    scheduling_preview: dict | None = None
 
     model_config = {"from_attributes": True}
 

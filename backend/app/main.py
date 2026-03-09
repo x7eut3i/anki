@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
 from app.database import create_db_and_tables, get_session
@@ -410,6 +411,9 @@ app.add_middleware(
 # Security middleware
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware, login_rpm=10, api_rpm=120)
+
+# GZip compression — reduces JSON/HTML payload sizes significantly
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # Register routers
 app.include_router(auth.router)

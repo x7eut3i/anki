@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuthStore } from "@/lib/store";
-import { quiz as quizApi, categories as catApi } from "@/lib/api";
+import { quiz as quizApi, categories as catApi, review } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,12 +43,45 @@ export default function QuizPage() {
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(0);
+  const [pendingRecovery, setPendingRecovery] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (!token) return;
-    catApi.listAll(token).then((data) => {
-      // Merge real categories + AI decks (AI decks already have negative IDs)
-      setCats([...(data.categories || []), ...(data.ai_categories || [])]);
+    const wantsResume = new URLSearchParams(window.location.search).get("resume") === "1";
+
+    Promise.all([
+      catApi.listAll(token),
+      review.getActiveQuizSession(token).catch(() => null),
+    ]).then(([catData, quizSession]) => {
+      setCats([...(catData.categories || []), ...(catData.ai_categories || [])]);
+
+      // Check for active quiz session on server
+      if (quizSession && !quizSession.is_completed) {
+        try {
+          const savedQuestions = JSON.parse(quizSession.quiz_questions || "[]");
+          const savedAnswers = JSON.parse(quizSession.quiz_user_answers || "{}");
+          if (savedQuestions.length > 0) {
+            if (wantsResume) {
+              // Auto-restore from dashboard link
+              setQuestions(savedQuestions);
+              setAnswers(savedAnswers);
+              setSessionId(quizSession.id);
+              setCurrentQ(quizSession.current_question || 0);
+              setQuizStarted(true);
+            } else {
+              setPendingRecovery({
+                questions: savedQuestions,
+                answers: savedAnswers,
+                sessionId: quizSession.id,
+                total: quizSession.total_cards,
+                answered: Object.keys(savedAnswers).length,
+                currentQuestion: quizSession.current_question || 0,
+              });
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
     });
   }, [token]);
 
@@ -74,14 +107,70 @@ export default function QuizPage() {
       setCurrentQ(0);
       setAnswers({});
       setResult(null);
+      setPendingRecovery(null);
     } finally {
       setLoading(false);
     }
   };
 
-  const selectAnswer = (questionId: number, cardId: number, answer: string) => {
-    setAnswers((prev) => ({ ...prev, [questionId]: { card_id: cardId, answer } }));
+  const restoreQuiz = () => {
+    if (!pendingRecovery) return;
+    setQuestions(pendingRecovery.questions || []);
+    setAnswers(pendingRecovery.answers || {});
+    setSessionId(pendingRecovery.sessionId || 0);
+    setCurrentQ(pendingRecovery.currentQuestion || 0);
+    setQuizStarted(true);
+    setPendingRecovery(null);
   };
+
+  const selectAnswer = (questionId: number, cardId: number, answer: string, isChoice = false) => {
+    const alreadyAnswered = !!answers[questionId];
+    setAnswers((prev) => ({ ...prev, [questionId]: { card_id: cardId, answer } }));
+    // Auto-advance to next question after selecting a choice (first time only)
+    if (isChoice && !alreadyAnswered && currentQ < questions.length - 1) {
+      setTimeout(() => setCurrentQ((c) => c + 1), 350);
+    }
+  };
+
+  const saveQuizProgress = useCallback(async () => {
+    if (!token || !sessionId || isSaving) return;
+    setIsSaving(true);
+    try {
+      await quizApi.save(sessionId, { answers, current_q: currentQ }, token);
+    } catch (e) {
+      console.error("Failed to save quiz progress", e);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [token, sessionId, answers, currentQ, isSaving]);
+
+  // --- Auto-save on page leave ---
+  const autoSaveFiredRef = useRef(false);
+  const autoSaveRef = useRef<() => void>();
+  autoSaveRef.current = () => {
+    if (autoSaveFiredRef.current) return;
+    if (!token || !sessionId || !quizStarted || result) return;
+    autoSaveFiredRef.current = true;
+    // Use fetch with keepalive for reliability during page unload
+    fetch(`/api/quiz/save/${sessionId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ answers, current_q: currentQ }),
+      keepalive: true,
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    const handleBeforeUnload = () => autoSaveRef.current?.();
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      // Save on unmount (SPA route change)
+      autoSaveRef.current?.();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
 
   const submitQuiz = async () => {
     if (!token) return;
@@ -116,6 +205,32 @@ export default function QuizPage() {
           <h2 className="text-3xl font-bold tracking-tight">模拟测试</h2>
           <p className="text-muted-foreground">选择分类和题目数量开始测试</p>
         </div>
+
+        {/* Recovery prompt */}
+        {pendingRecovery && (
+          <Card className="border-green-500/50 bg-green-50/50 dark:bg-green-950/20">
+            <CardContent className="flex items-center justify-between py-4">
+              <div className="flex items-center gap-3">
+                <ClipboardCheck className="h-8 w-8 text-green-600 animate-pulse" />
+                <div>
+                  <p className="font-semibold">发现未完成的测试</p>
+                  <p className="text-sm text-muted-foreground">
+                    已答 {pendingRecovery.answered || 0} / {pendingRecovery.total || 0} 题
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={restoreQuiz} className="bg-green-600 hover:bg-green-700">
+                  <ClipboardCheck className="mr-2 h-4 w-4" />
+                  继续测试
+                </Button>
+                <Button variant="outline" onClick={() => { setPendingRecovery(null); }}>
+                  放弃
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -292,7 +407,10 @@ export default function QuizPage() {
       {/* Progress */}
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>第 {currentQ + 1} / {questions.length} 题</span>
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-muted px-2 py-0.5 rounded-full">
+            ✅ 已答 {Object.keys(answers).length}/{questions.length}
+          </span>
           {q.category_name && <Badge variant="secondary">{q.category_name}</Badge>}
           {q.tags_list?.filter(t => !isHiddenTag(t.name)).map(tag => (
             <Badge
@@ -327,7 +445,7 @@ export default function QuizPage() {
                         ? "bg-primary/10 border-primary"
                         : "hover:bg-muted"
                     )}
-                    onClick={() => selectAnswer(q.question_id, q.card_id, letter)}
+                    onClick={() => selectAnswer(q.question_id, q.card_id, letter, true)}
                   >
                     <span className="font-medium mr-2">{letter}.</span>
                     {opt}
@@ -348,7 +466,7 @@ export default function QuizPage() {
       </Card>
 
       {/* Navigation */}
-      <div className="flex justify-between">
+      <div className="flex justify-between items-center">
         <Button
           variant="outline"
           disabled={currentQ === 0}
@@ -356,6 +474,16 @@ export default function QuizPage() {
         >
           <ArrowLeft className="mr-1 h-4 w-4" />
           上一题
+        </Button>
+
+        <Button
+          variant="outline"
+          size="lg"
+          className="text-base h-10 px-5 font-medium bg-green-50 hover:bg-green-100 text-green-700 border-green-300 dark:bg-green-950/30 dark:hover:bg-green-950/50 dark:text-green-400 dark:border-green-800"
+          disabled={isSaving || !sessionId}
+          onClick={saveQuizProgress}
+        >
+          {isSaving ? "保存中..." : "💾 暂存"}
         </Button>
 
         {currentQ < questions.length - 1 ? (

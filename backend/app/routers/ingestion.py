@@ -40,7 +40,6 @@ class IngestionConfigResponse(BaseModel):
     quality_threshold: float
     auto_analyze: bool
     auto_create_cards: bool
-    concurrency: int = 3
     updated_at: datetime
     model_config = {"from_attributes": True}
 
@@ -56,7 +55,6 @@ class IngestionConfigUpdate(BaseModel):
     quality_threshold: float | None = None
     auto_analyze: bool | None = None
     auto_create_cards: bool | None = None
-    concurrency: int | None = None
 
 
 class IngestionLogResponse(BaseModel):
@@ -430,71 +428,74 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                concurrency = getattr(cfg, "concurrency", 3) or 3
-                add_entry("info", "系统", f"并发处理数: {concurrency}")
-                sem = _asyncio.Semaphore(concurrency)
-                state_lock = _asyncio.Lock()
-
                 from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
+
+                # Capture IDs for per-task sessions (avoid sharing ORM objects across tasks)
+                config_id = config.id
+                admin_uid = admin_user.id if admin_user else 1
+                quality_threshold = cfg.quality_threshold
+                state_lock = _asyncio.Lock()
 
                 async def _process_one_article(art: dict):
                     nonlocal total_analyzed, total_skipped, total_cards, total_errors
 
-                    # ── Cancel check ──
                     if _cancel_requested:
                         return
 
                     url = art["url"]
 
+                    # ── Shared-state checks under lock ──
                     async with state_lock:
                         if url in analyzed_urls:
                             add_entry("skip", art.get("section", art.get("source_name", "")),
                                       f"已分析过，跳过: {art['title'][:40]}")
                             total_skipped += 1
                             return
-                        # Check rejected URL cache — skip if cached score still below threshold
                         if url in url_score_cache:
                             cached_score = url_score_cache[url]
-                            if cached_score < cfg.quality_threshold:
+                            if cached_score < quality_threshold:
                                 add_entry("skip", art.get("section", art.get("source_name", "")),
-                                          f"缓存评分 {cached_score} < 阈值 {cfg.quality_threshold}，跳过: {art['title'][:40]}")
+                                          f"缓存评分 {cached_score} < 阈值 {quality_threshold}，跳过: {art['title'][:40]}")
                                 total_skipped += 1
                                 return
-                            # Threshold lowered — cached score now qualifies, re-analyze
                             add_entry("info", art.get("section", art.get("source_name", "")),
-                                      f"阈值已调低至 {cfg.quality_threshold}，重新分析（缓存评分 {cached_score}）: {art['title'][:40]}")
-                        # Claim this URL to avoid duplicates from concurrent tasks
+                                      f"阈值已调低至 {quality_threshold}，重新分析（缓存评分 {cached_score}）: {art['title'][:40]}")
                         analyzed_urls.add(url)
 
                     source_label = art.get("section", art.get("source_name", ""))
 
-                    async with sem:
-                        if _cancel_requested:
+                    try:
+                        fetch_result = await fetch_and_extract_url(url)
+                        body_text = fetch_result["content"]
+                        extracted_title = fetch_result["title"]
+                        title = art["title"] or extracted_title
+
+                        publish_date = art.get("date", "") or ""
+                        if not publish_date:
+                            publish_date = fetch_result["publish_date"]
+
+                        if len(body_text) < 500:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
+                                total_skipped += 1
+                                analyzed_urls.discard(url)
                             return
 
-                        try:
-                            fetch_result = await fetch_and_extract_url(url)
-                            body_text = fetch_result["content"]
-                            extracted_title = fetch_result["title"]
-                            title = art["title"] or extracted_title
-
-                            publish_date = art.get("date", "") or ""
-                            if not publish_date:
-                                publish_date = fetch_result["publish_date"]
-
-                            if len(body_text) < 500:
+                        # ── AI calls use per-task session ──
+                        with SyncSession(db_engine) as task_session:
+                            task_config = task_session.get(AIConfig, config_id)
+                            if not task_config:
                                 async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
-                                    total_skipped += 1
-                                    analyzed_urls.discard(url)  # wasn't actually analyzed
+                                    add_entry("error", source_label, f"AI配置不存在，跳过: {title[:40]}")
+                                    total_errors += 1
                                 return
-                            
+
                             # ── AI Step 1: Content cleanup ──
                             body_text = await ai_cleanup_content(
-                                config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
 
@@ -503,108 +504,116 @@ async def _run_pipeline_internal(run_type: str = "manual"):
 
                             async with state_lock:
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
-                            
+
                             # ── AI Step 2: Article analysis ──
                             analysis_data = await ai_analyze_article(
-                                session, config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_session, task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
-                            if analysis_data is None:
-                                async with state_lock:
-                                    add_entry("error", source_label, f"AI分析失败: {title[:40]}")
-                                    total_errors += 1
-                                    analyzed_urls.discard(url)
-                                return
 
-                            quality = analysis_data.get("quality_score", 5)
-
-                            if quality < cfg.quality_threshold:
-                                async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"质量 {quality} < 阈值 {cfg.quality_threshold}，跳过该篇文章（{title}，{art['url']}）")
-                                    total_skipped += 1
-                                    # Cache score so next run can skip without AI
-                                    _prev = session.exec(
-                                        select(IngestionUrlCache).where(IngestionUrlCache.url == url)
-                                    ).first()
-                                    if _prev:
-                                        _prev.quality_score = quality
-                                        _prev.title = title[:200]
-                                        _prev.analyzed_at = datetime.now(timezone.utc)
-                                    else:
-                                        session.add(IngestionUrlCache(
-                                            url=url, quality_score=quality, title=title[:200],
-                                        ))
-                                    session.commit()
-                                    url_score_cache[url] = quality
-                                return
-
-                            analysis_html = _build_analysis_html(title, analysis_data)
-
-                            # DB write under lock (SQLite single-writer)
+                        if analysis_data is None:
                             async with state_lock:
-                                # Remove from rejected cache if previously cached
+                                add_entry("error", source_label, f"AI分析失败: {title[:40]}")
+                                total_errors += 1
+                                analyzed_urls.discard(url)
+                            return
+
+                        quality = analysis_data.get("quality_score", 5)
+
+                        if quality < quality_threshold:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"质量 {quality} < 阈值 {quality_threshold}，跳过该篇文章（{title}，{art['url']}）")
+                                total_skipped += 1
                                 _prev = session.exec(
                                     select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                                 ).first()
                                 if _prev:
-                                    session.delete(_prev)
-                                    url_score_cache.pop(url, None)
-
-                                analysis_item = ArticleAnalysis(
-                                    user_id=admin_user.id if admin_user else 1,
-                                    title=title,
-                                    source_url=url,
-                                    source_name=art.get("source_name", source_label),
-                                    publish_date=publish_date[:20] if publish_date else "",
-                                    content=body_text,
-                                    analysis_html=analysis_html,
-                                    analysis_json=json.dumps(analysis_data, ensure_ascii=False),
-                                    quality_score=quality,
-                                    quality_reason=analysis_data.get("quality_reason", ""),
-                                    word_count=len(body_text),
-                                    status="new",
-                                )
-                                session.add(analysis_item)
+                                    _prev.quality_score = quality
+                                    _prev.title = title[:200]
+                                    _prev.analyzed_at = datetime.now(timezone.utc)
+                                else:
+                                    session.add(IngestionUrlCache(
+                                        url=url, quality_score=quality, title=title[:200],
+                                    ))
                                 session.commit()
-                                total_analyzed += 1
-                                add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+                                url_score_cache[url] = quality
+                            return
 
-                            # ── AI Step 3: Card generation ──
-                            if not _cancel_requested:
+                        analysis_html = _build_analysis_html(title, analysis_data)
+
+                        # ── Save article under lock (main session) ──
+                        async with state_lock:
+                            _prev = session.exec(
+                                select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                            ).first()
+                            if _prev:
+                                session.delete(_prev)
+                                url_score_cache.pop(url, None)
+
+                            analysis_item = ArticleAnalysis(
+                                user_id=admin_uid,
+                                title=title,
+                                source_url=url,
+                                source_name=art.get("source_name", source_label),
+                                publish_date=publish_date[:20] if publish_date else "",
+                                content=body_text,
+                                analysis_html=analysis_html,
+                                analysis_json=json.dumps(analysis_data, ensure_ascii=False),
+                                quality_score=quality,
+                                quality_reason=analysis_data.get("quality_reason", ""),
+                                word_count=len(body_text),
+                                status="new",
+                            )
+                            session.add(analysis_item)
+                            session.commit()
+                            total_analyzed += 1
+                            add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+
+                        # ── AI Step 3: Card generation (per-task session) ──
+                        if not _cancel_requested:
+                            with SyncSession(db_engine) as task_session:
+                                task_config = task_session.get(AIConfig, config_id)
                                 cards_created_this, _ = await ai_generate_cards(
-                                    session, config, title, body_text,
+                                    task_session, task_config, title, body_text,
                                     source_url=url,
-                                    user_id=admin_user.id if admin_user else 1,
+                                    user_id=admin_uid,
                                     source="crawl",
                                 )
-                                async with state_lock:
-                                    total_cards += cards_created_this
-                                    add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
+                            async with state_lock:
+                                total_cards += cards_created_this
+                                add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
-                        except json.JSONDecodeError as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
-                                total_errors += 1
-                        except Exception as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
-                                total_errors += 1
-                        finally:
-                            # Flush stats to DB so frontend sees progress
-                            async with state_lock:
-                                log.articles_analyzed = total_analyzed
-                                log.articles_skipped = total_skipped
-                                log.cards_created = total_cards
-                                log.errors_count = total_errors
-                                log.updated_at = datetime.now(timezone.utc)
-                                log.log_detail = json.dumps(entries, ensure_ascii=False)
-                                session.add(log)
-                                session.commit()
+                    except json.JSONDecodeError as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
+                            total_errors += 1
+                    except Exception as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
+                            total_errors += 1
+                    finally:
+                        # Flush stats to DB so frontend sees progress
+                        async with state_lock:
+                            log.articles_analyzed = total_analyzed
+                            log.articles_skipped = total_skipped
+                            log.cards_created = total_cards
+                            log.errors_count = total_errors
+                            log.updated_at = datetime.now(timezone.utc)
+                            log.log_detail = json.dumps(entries, ensure_ascii=False)
+                            session.add(log)
+                            session.commit()
 
-                # Launch all article tasks concurrently (semaphore limits parallelism)
-                tasks = [_process_one_article(art) for art in all_articles]
+                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _sem = _asyncio.Semaphore(_concurrency)
+                add_entry("info", "系统", f"并发上限: {_concurrency}")
+
+                async def _throttled(art: dict):
+                    async with _sem:
+                        await _process_one_article(art)
+
+                tasks = [_throttled(art) for art in all_articles]
                 await _asyncio.gather(*tasks)
 
                 if _cancel_requested:
@@ -805,12 +814,13 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                concurrency = getattr(cfg, "concurrency", 3) or 3
-                sem = _asyncio.Semaphore(concurrency)
-                state_lock = _asyncio.Lock()
-
                 from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
+
+                config_id = config.id
+                admin_uid = admin_user.id if admin_user else 1
+                quality_threshold = cfg.quality_threshold
+                state_lock = _asyncio.Lock()
 
                 async def _process_one_article(art: dict):
                     nonlocal total_analyzed, total_skipped, total_cards, total_errors
@@ -828,40 +838,44 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             return
                         if url in url_score_cache:
                             cached_score = url_score_cache[url]
-                            if cached_score < cfg.quality_threshold:
+                            if cached_score < quality_threshold:
                                 add_entry("skip", "人民日报",
-                                          f"缓存评分 {cached_score} < 阈值 {cfg.quality_threshold}，跳过: {art['title'][:40]}")
+                                          f"缓存评分 {cached_score} < 阈值 {quality_threshold}，跳过: {art['title'][:40]}")
                                 total_skipped += 1
                                 return
                         analyzed_urls.add(url)
 
                     source_label = art.get("section", "人民日报")
 
-                    async with sem:
-                        if _cancel_requested:
+                    try:
+                        fetch_result = await fetch_and_extract_url(url)
+                        body_text = fetch_result["content"]
+                        extracted_title = fetch_result["title"]
+                        title = art["title"] or extracted_title
+
+                        publish_date = art.get("date", "") or ""
+                        if not publish_date:
+                            publish_date = fetch_result["publish_date"]
+
+                        if len(body_text) < 600:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
+                                total_skipped += 1
+                                analyzed_urls.discard(url)
                             return
 
-                        try:
-                            fetch_result = await fetch_and_extract_url(url)
-                            body_text = fetch_result["content"]
-                            extracted_title = fetch_result["title"]
-                            title = art["title"] or extracted_title
-
-                            publish_date = art.get("date", "") or ""
-                            if not publish_date:
-                                publish_date = fetch_result["publish_date"]
-
-                            if len(body_text) < 600:
+                        with SyncSession(db_engine) as task_session:
+                            task_config = task_session.get(AIConfig, config_id)
+                            if not task_config:
                                 async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
-                                    total_skipped += 1
-                                    analyzed_urls.discard(url)
+                                    add_entry("error", source_label, f"AI配置不存在，跳过: {title[:40]}")
+                                    total_errors += 1
                                 return
 
                             body_text = await ai_cleanup_content(
-                                config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
 
@@ -872,74 +886,76 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
 
                             analysis_data = await ai_analyze_article(
-                                session, config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_session, task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
-                            if analysis_data is None:
-                                async with state_lock:
-                                    add_entry("error", source_label, f"AI分析失败: {title[:40]}")
-                                    total_errors += 1
-                                    analyzed_urls.discard(url)
-                                return
 
-                            quality = analysis_data.get("quality_score", 5)
-
-                            if quality < cfg.quality_threshold:
-                                async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"质量 {quality} < 阈值 {cfg.quality_threshold}，跳过: {title[:40]}")
-                                    total_skipped += 1
-                                    _prev = session.exec(
-                                        select(IngestionUrlCache).where(IngestionUrlCache.url == url)
-                                    ).first()
-                                    if _prev:
-                                        _prev.quality_score = quality
-                                        _prev.title = title[:200]
-                                        _prev.analyzed_at = datetime.now(timezone.utc)
-                                    else:
-                                        session.add(IngestionUrlCache(
-                                            url=url, quality_score=quality, title=title[:200],
-                                        ))
-                                    session.commit()
-                                    url_score_cache[url] = quality
-                                return
-
-                            analysis_html = _build_analysis_html(title, analysis_data)
-
+                        if analysis_data is None:
                             async with state_lock:
+                                add_entry("error", source_label, f"AI分析失败: {title[:40]}")
+                                total_errors += 1
+                                analyzed_urls.discard(url)
+                            return
+
+                        quality = analysis_data.get("quality_score", 5)
+
+                        if quality < quality_threshold:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"质量 {quality} < 阈值 {quality_threshold}，跳过: {title[:40]}")
+                                total_skipped += 1
                                 _prev = session.exec(
                                     select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                                 ).first()
                                 if _prev:
-                                    session.delete(_prev)
-                                    url_score_cache.pop(url, None)
-
-                                analysis_item = ArticleAnalysis(
-                                    user_id=admin_user.id if admin_user else 1,
-                                    title=title,
-                                    source_url=url,
-                                    source_name=art.get("source_name", source_label),
-                                    publish_date=publish_date[:20] if publish_date else "",
-                                    content=body_text,
-                                    analysis_html=analysis_html,
-                                    analysis_json=json.dumps(analysis_data, ensure_ascii=False),
-                                    quality_score=quality,
-                                    quality_reason=analysis_data.get("quality_reason", ""),
-                                    word_count=len(body_text),
-                                    status="new",
-                                )
-                                session.add(analysis_item)
+                                    _prev.quality_score = quality
+                                    _prev.title = title[:200]
+                                    _prev.analyzed_at = datetime.now(timezone.utc)
+                                else:
+                                    session.add(IngestionUrlCache(
+                                        url=url, quality_score=quality, title=title[:200],
+                                    ))
                                 session.commit()
-                                total_analyzed += 1
-                                add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+                                url_score_cache[url] = quality
+                            return
 
-                            cards_created_this = 0
-                            if not _cancel_requested:
+                        analysis_html = _build_analysis_html(title, analysis_data)
+
+                        async with state_lock:
+                            _prev = session.exec(
+                                select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                            ).first()
+                            if _prev:
+                                session.delete(_prev)
+                                url_score_cache.pop(url, None)
+
+                            analysis_item = ArticleAnalysis(
+                                user_id=admin_uid,
+                                title=title,
+                                source_url=url,
+                                source_name=art.get("source_name", source_label),
+                                publish_date=publish_date[:20] if publish_date else "",
+                                content=body_text,
+                                analysis_html=analysis_html,
+                                analysis_json=json.dumps(analysis_data, ensure_ascii=False),
+                                quality_score=quality,
+                                quality_reason=analysis_data.get("quality_reason", ""),
+                                word_count=len(body_text),
+                                status="new",
+                            )
+                            session.add(analysis_item)
+                            session.commit()
+                            total_analyzed += 1
+                            add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+
+                        if not _cancel_requested:
+                            with SyncSession(db_engine) as task_session:
+                                task_config = task_session.get(AIConfig, config_id)
                                 cards_created_this, _ = await ai_generate_cards(
-                                    session, config, title, body_text,
+                                    task_session, task_config, title, body_text,
                                     source_url=url,
-                                    user_id=admin_user.id if admin_user else 1,
+                                    user_id=admin_uid,
                                     source="crawl",
                                 )
                             async with state_lock:
@@ -947,26 +963,34 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 if cards_created_this:
                                     add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
-                        except json.JSONDecodeError as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
-                                total_errors += 1
-                        except Exception as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
-                                total_errors += 1
-                        finally:
-                            async with state_lock:
-                                log.articles_analyzed = total_analyzed
-                                log.articles_skipped = total_skipped
-                                log.cards_created = total_cards
-                                log.errors_count = total_errors
-                                log.updated_at = datetime.now(timezone.utc)
-                                log.log_detail = json.dumps(entries, ensure_ascii=False)
-                                session.add(log)
-                                session.commit()
+                    except json.JSONDecodeError as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
+                            total_errors += 1
+                    except Exception as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
+                            total_errors += 1
+                    finally:
+                        async with state_lock:
+                            log.articles_analyzed = total_analyzed
+                            log.articles_skipped = total_skipped
+                            log.cards_created = total_cards
+                            log.errors_count = total_errors
+                            log.updated_at = datetime.now(timezone.utc)
+                            log.log_detail = json.dumps(entries, ensure_ascii=False)
+                            session.add(log)
+                            session.commit()
 
-                tasks = [_process_one_article(art) for art in all_articles]
+                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _sem = _asyncio.Semaphore(_concurrency)
+                add_entry("info", "系统", f"并发上限: {_concurrency}")
+
+                async def _throttled(art: dict):
+                    async with _sem:
+                        await _process_one_article(art)
+
+                tasks = [_throttled(art) for art in all_articles]
                 await _asyncio.gather(*tasks)
 
                 if _cancel_requested:
@@ -1164,12 +1188,13 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                concurrency = getattr(cfg, "concurrency", 3) or 3
-                sem = _asyncio.Semaphore(concurrency)
-                state_lock = _asyncio.Lock()
-
                 from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
+
+                config_id = config.id
+                admin_uid = admin_user.id if admin_user else 1
+                quality_threshold = cfg.quality_threshold
+                state_lock = _asyncio.Lock()
 
                 async def _process_one_article(art: dict):
                     nonlocal total_analyzed, total_skipped, total_cards, total_errors
@@ -1187,40 +1212,44 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             return
                         if url in url_score_cache:
                             cached_score = url_score_cache[url]
-                            if cached_score < cfg.quality_threshold:
+                            if cached_score < quality_threshold:
                                 add_entry("skip", "求是杂志",
-                                          f"缓存评分 {cached_score} < 阈值 {cfg.quality_threshold}，跳过: {art['title'][:40]}")
+                                          f"缓存评分 {cached_score} < 阈值 {quality_threshold}，跳过: {art['title'][:40]}")
                                 total_skipped += 1
                                 return
                         analyzed_urls.add(url)
 
                     source_label = art.get("section", "求是杂志")
 
-                    async with sem:
-                        if _cancel_requested:
+                    try:
+                        fetch_result = await fetch_and_extract_url(url)
+                        body_text = fetch_result["content"]
+                        extracted_title = fetch_result["title"]
+                        title = art["title"] or extracted_title
+
+                        publish_date = art.get("date", "") or ""
+                        if not publish_date:
+                            publish_date = fetch_result["publish_date"]
+
+                        if len(body_text) < 600:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
+                                total_skipped += 1
+                                analyzed_urls.discard(url)
                             return
 
-                        try:
-                            fetch_result = await fetch_and_extract_url(url)
-                            body_text = fetch_result["content"]
-                            extracted_title = fetch_result["title"]
-                            title = art["title"] or extracted_title
-
-                            publish_date = art.get("date", "") or ""
-                            if not publish_date:
-                                publish_date = fetch_result["publish_date"]
-
-                            if len(body_text) < 600:
+                        with SyncSession(db_engine) as task_session:
+                            task_config = task_session.get(AIConfig, config_id)
+                            if not task_config:
                                 async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"正文太短（{len(body_text)}字），跳过: {title[:40]}")
-                                    total_skipped += 1
-                                    analyzed_urls.discard(url)
+                                    add_entry("error", source_label, f"AI配置不存在，跳过: {title[:40]}")
+                                    total_errors += 1
                                 return
 
                             body_text = await ai_cleanup_content(
-                                config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
 
@@ -1231,74 +1260,76 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
 
                             analysis_data = await ai_analyze_article(
-                                session, config, title, body_text,
-                                user_id=admin_user.id if admin_user else 1,
+                                task_session, task_config, title, body_text,
+                                user_id=admin_uid,
                                 source="crawl",
                             )
-                            if analysis_data is None:
-                                async with state_lock:
-                                    add_entry("error", source_label, f"AI分析失败: {title[:40]}")
-                                    total_errors += 1
-                                    analyzed_urls.discard(url)
-                                return
 
-                            quality = analysis_data.get("quality_score", 5)
-
-                            if quality < cfg.quality_threshold:
-                                async with state_lock:
-                                    add_entry("skip", source_label,
-                                              f"质量 {quality} < 阈值 {cfg.quality_threshold}，跳过: {title[:40]}")
-                                    total_skipped += 1
-                                    _prev = session.exec(
-                                        select(IngestionUrlCache).where(IngestionUrlCache.url == url)
-                                    ).first()
-                                    if _prev:
-                                        _prev.quality_score = quality
-                                        _prev.title = title[:200]
-                                        _prev.analyzed_at = datetime.now(timezone.utc)
-                                    else:
-                                        session.add(IngestionUrlCache(
-                                            url=url, quality_score=quality, title=title[:200],
-                                        ))
-                                    session.commit()
-                                    url_score_cache[url] = quality
-                                return
-
-                            analysis_html = _build_analysis_html(title, analysis_data)
-
+                        if analysis_data is None:
                             async with state_lock:
+                                add_entry("error", source_label, f"AI分析失败: {title[:40]}")
+                                total_errors += 1
+                                analyzed_urls.discard(url)
+                            return
+
+                        quality = analysis_data.get("quality_score", 5)
+
+                        if quality < quality_threshold:
+                            async with state_lock:
+                                add_entry("skip", source_label,
+                                          f"质量 {quality} < 阈值 {quality_threshold}，跳过: {title[:40]}")
+                                total_skipped += 1
                                 _prev = session.exec(
                                     select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                                 ).first()
                                 if _prev:
-                                    session.delete(_prev)
-                                    url_score_cache.pop(url, None)
-
-                                analysis_item = ArticleAnalysis(
-                                    user_id=admin_user.id if admin_user else 1,
-                                    title=title,
-                                    source_url=url,
-                                    source_name=art.get("source_name", source_label),
-                                    publish_date=publish_date[:20] if publish_date else "",
-                                    content=body_text,
-                                    analysis_html=analysis_html,
-                                    analysis_json=json.dumps(analysis_data, ensure_ascii=False),
-                                    quality_score=quality,
-                                    quality_reason=analysis_data.get("quality_reason", ""),
-                                    word_count=len(body_text),
-                                    status="new",
-                                )
-                                session.add(analysis_item)
+                                    _prev.quality_score = quality
+                                    _prev.title = title[:200]
+                                    _prev.analyzed_at = datetime.now(timezone.utc)
+                                else:
+                                    session.add(IngestionUrlCache(
+                                        url=url, quality_score=quality, title=title[:200],
+                                    ))
                                 session.commit()
-                                total_analyzed += 1
-                                add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+                                url_score_cache[url] = quality
+                            return
 
-                            cards_created_this = 0
-                            if not _cancel_requested:
+                        analysis_html = _build_analysis_html(title, analysis_data)
+
+                        async with state_lock:
+                            _prev = session.exec(
+                                select(IngestionUrlCache).where(IngestionUrlCache.url == url)
+                            ).first()
+                            if _prev:
+                                session.delete(_prev)
+                                url_score_cache.pop(url, None)
+
+                            analysis_item = ArticleAnalysis(
+                                user_id=admin_uid,
+                                title=title,
+                                source_url=url,
+                                source_name=art.get("source_name", source_label),
+                                publish_date=publish_date[:20] if publish_date else "",
+                                content=body_text,
+                                analysis_html=analysis_html,
+                                analysis_json=json.dumps(analysis_data, ensure_ascii=False),
+                                quality_score=quality,
+                                quality_reason=analysis_data.get("quality_reason", ""),
+                                word_count=len(body_text),
+                                status="new",
+                            )
+                            session.add(analysis_item)
+                            session.commit()
+                            total_analyzed += 1
+                            add_entry("info", source_label, f"✅ 分析完成 质量={quality}/10: {title[:40]}")
+
+                        if not _cancel_requested:
+                            with SyncSession(db_engine) as task_session:
+                                task_config = task_session.get(AIConfig, config_id)
                                 cards_created_this, _ = await ai_generate_cards(
-                                    session, config, title, body_text,
+                                    task_session, task_config, title, body_text,
                                     source_url=url,
-                                    user_id=admin_user.id if admin_user else 1,
+                                    user_id=admin_uid,
                                     source="crawl",
                                 )
                             async with state_lock:
@@ -1306,26 +1337,34 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 if cards_created_this:
                                     add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
 
-                        except json.JSONDecodeError as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
-                                total_errors += 1
-                        except Exception as e:
-                            async with state_lock:
-                                add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
-                                total_errors += 1
-                        finally:
-                            async with state_lock:
-                                log.articles_analyzed = total_analyzed
-                                log.articles_skipped = total_skipped
-                                log.cards_created = total_cards
-                                log.errors_count = total_errors
-                                log.updated_at = datetime.now(timezone.utc)
-                                log.log_detail = json.dumps(entries, ensure_ascii=False)
-                                session.add(log)
-                                session.commit()
+                    except json.JSONDecodeError as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"AI返回JSON解析失败: {str(e)[:100]}")
+                            total_errors += 1
+                    except Exception as e:
+                        async with state_lock:
+                            add_entry("error", source_label, f"处理文章失败: {str(e)[:150]}")
+                            total_errors += 1
+                    finally:
+                        async with state_lock:
+                            log.articles_analyzed = total_analyzed
+                            log.articles_skipped = total_skipped
+                            log.cards_created = total_cards
+                            log.errors_count = total_errors
+                            log.updated_at = datetime.now(timezone.utc)
+                            log.log_detail = json.dumps(entries, ensure_ascii=False)
+                            session.add(log)
+                            session.commit()
 
-                tasks = [_process_one_article(art) for art in all_articles]
+                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _sem = _asyncio.Semaphore(_concurrency)
+                add_entry("info", "系统", f"并发上限: {_concurrency}")
+
+                async def _throttled(art: dict):
+                    async with _sem:
+                        await _process_one_article(art)
+
+                tasks = [_throttled(art) for art in all_articles]
                 await _asyncio.gather(*tasks)
 
                 if _cancel_requested:

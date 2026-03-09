@@ -23,6 +23,9 @@ class DeckResponse(BaseModel):
     category_id: int | None
     is_public: bool
     card_count: int
+    new_count: int = 0
+    learning_count: int = 0
+    mastered_count: int = 0
     created_at: datetime
     updated_at: datetime
 

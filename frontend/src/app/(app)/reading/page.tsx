@@ -1948,6 +1948,7 @@ export default function ReadingPage() {
               <option value="publish_date">发布日期</option>
               <option value="quality_score">质量评分</option>
               <option value="word_count">字数</option>
+              <option value="last_read_at">最近阅读</option>
             </select>
             <button
               className="h-8 w-8 flex items-center justify-center rounded-md border bg-background hover:bg-muted transition-colors"
