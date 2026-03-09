@@ -60,6 +60,8 @@ def _migrate_add_columns():
         ("ingestion_configs", "timezone", "TEXT DEFAULT 'Asia/Shanghai'"),
         ("ingestion_logs", "updated_at", "TIMESTAMP"),
         ("users", "timezone", "TEXT DEFAULT 'Asia/Shanghai'"),
+        ("users", "study_question_mode", "TEXT DEFAULT 'custom'"),
+        ("users", "study_custom_ratio", "INTEGER DEFAULT 60"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:
