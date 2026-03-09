@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
@@ -28,6 +29,12 @@ engine = create_engine(
     _db_url,
     echo=False,
     connect_args={"check_same_thread": False},
+    # NullPool: no connection pooling — each Session opens a fresh connection
+    # and closes it on exit.  SQLite connections are just file-handles (~2 KB,
+    # ~0.1 ms to open), so pooling is unnecessary and the default QueuePool
+    # (size 5 + overflow 10 = 15 max) causes TimeoutError when background
+    # tasks hold connections during long AI HTTP calls.
+    poolclass=NullPool,
 )
 
 
