@@ -27,6 +27,9 @@ def _date_range(days: int | None, start: str | None, end: str | None, tz: ZoneIn
 
     When tz is provided, boundaries are computed in the user's local timezone
     and then converted to UTC for database queries.
+
+    When using ``days``, the start is truncated to midnight in the user's
+    local timezone so that ``days=1`` (today) covers from midnight to now.
     """
     if tz:
         now_local = datetime.now(tz)
@@ -41,11 +44,18 @@ def _date_range(days: int | None, start: str | None, end: str | None, tz: ZoneIn
             else:
                 dt_start = dt_start.replace(tzinfo=timezone.utc)
         except ValueError:
-            dt_start = now_local - timedelta(days=30)
+            dt_start = (now_local - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
     elif days:
-        dt_start = now_local - timedelta(days=days)
+        # days=1 → today only (start = today midnight)
+        # days=2 → today + yesterday (start = yesterday midnight)
+        # days=N → last N days (start = N-1 days ago midnight)
+        dt_start = (now_local - timedelta(days=days - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
     else:
-        dt_start = now_local - timedelta(days=30)
+        dt_start = (now_local - timedelta(days=29)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
 
     if end:
         try:
@@ -476,7 +486,7 @@ def get_study_stats(
     # Streak
     from app.services.review_service import ReviewService
     rs = ReviewService(session, current_user.id)
-    streak = rs._calculate_streak()
+    streak = rs._calculate_streak(tz=user_tz)
 
     # Card state counts
     from app.models.user_card_progress import UserCardProgress

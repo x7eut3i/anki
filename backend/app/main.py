@@ -348,6 +348,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to clean up stale ingestion logs: %s", e)
 
+    # Mark any "running"/"pending" AI jobs as failed (server restarted)
+    try:
+        from app.models.ai_job import AIJob
+        from sqlmodel import col as _col
+        with _Session(_engine) as _sess:
+            stale_jobs = _sess.exec(
+                _select(AIJob).where(_col(AIJob.status).in_(["running", "pending"]))
+            ).all()
+            for sj in stale_jobs:
+                sj.status = "failed"
+                sj.error_message = "服务器重启，任务被中断"
+                sj.completed_at = datetime.now(timezone.utc)
+                _sess.add(sj)
+            if stale_jobs:
+                _sess.commit()
+                logger.info("🔧 Marked %d stale AI jobs as failed (server restart)", len(stale_jobs))
+    except Exception as e:
+        logger.warning("Failed to clean up stale AI jobs: %s", e)
+
     # Clean up old logs based on retention setting
     try:
         from app.routers.logs import cleanup_old_logs

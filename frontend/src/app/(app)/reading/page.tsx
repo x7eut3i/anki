@@ -928,13 +928,14 @@ export default function ReadingPage() {
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceNames, setSourceNames] = useState<string[]>([]);
-  const [failedOnly, setFailedOnly] = useState(false);
   const [tagFilter, setTagFilter] = useState<number | null>(null);
   const [filterTags, setFilterTags] = useState<any[]>([]);
 
   // Batch operations
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchReanalyzing, setBatchReanalyzing] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairResult, setRepairResult] = useState<{ message: string; total: number; need_reanalyze: number; need_cards_only: number; job_id: number | null } | null>(null);
 
   // Sorting
   const [sortBy, setSortBy] = useState<string>(() => loadSortPreference("reading", { sortKey: "created_at", sortDir: "desc" }).sortKey);
@@ -1015,10 +1016,9 @@ export default function ReadingPage() {
       if (searchQuery.trim()) params.search = searchQuery.trim();
       if (sortBy) params.sort_by = sortBy;
       if (sortDir) params.sort_dir = sortDir;
-      if (failedOnly) params.min_quality = 0;
       if (tagFilter) params.tag_id = tagFilter;
       const data = await reading.list(params, token);
-      setItems(failedOnly ? data.items.filter((i: any) => i.quality_score === 0) : data.items);
+      setItems(data.items);
       setTotal(data.total);
       if (data.source_names) setSourceNames(data.source_names);
       setSelectedIds(new Set());
@@ -1027,7 +1027,7 @@ export default function ReadingPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, page, statusFilter, starredOnly, sourceFilter, searchQuery, sortBy, sortDir, failedOnly, tagFilter]);
+  }, [token, page, statusFilter, starredOnly, sourceFilter, searchQuery, sortBy, sortDir, tagFilter]);
 
   useEffect(() => { fetchList(); }, [fetchList]);
 
@@ -1779,7 +1779,34 @@ export default function ReadingPage() {
             AI驱动的时政文章深度阅读分析 · 共 {total} 篇
           </p>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs sm:text-sm text-orange-600 border-orange-200 hover:bg-orange-50"
+            disabled={repairing}
+            onClick={async () => {
+              if (!token || repairing) return;
+              setRepairing(true);
+              setRepairResult(null);
+              try {
+                const res = await reading.repair(token);
+                setRepairResult(res);
+                if (res.total === 0) {
+                  showToast("没有需要修复的文章 🎉", "info");
+                } else {
+                  showToast(`修复任务已启动：${res.need_reanalyze} 篇重新分析，${res.need_cards_only} 篇补生成卡片`, "success");
+                }
+              } catch (e: any) {
+                showToast("修复失败：" + (e.message || "未知错误"), "error");
+              } finally {
+                setRepairing(false);
+              }
+            }}
+          >
+            {repairing ? <Loader2 className="h-4 w-4 animate-spin sm:mr-1" /> : <span className="sm:mr-1">🔧</span>}
+            <span className="hidden sm:inline">一键修复</span>
+          </Button>
           <Button variant="outline" size="sm" className="text-xs sm:text-sm" onClick={async () => {
             if (!token) return;
             try {
@@ -1833,7 +1860,16 @@ export default function ReadingPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Repair result banner */}
+      {repairResult && repairResult.total > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 flex items-center justify-between">
+          <div className="text-sm text-orange-800">
+            🔧 修复任务已启动：<strong>{repairResult.need_reanalyze}</strong> 篇重新分析，<strong>{repairResult.need_cards_only}</strong> 篇补生成卡片。
+            请在 <span className="font-medium">AI任务</span> 页面查看进度。
+          </div>
+          <button className="text-orange-500 hover:text-orange-700 text-xs" onClick={() => setRepairResult(null)}>✕</button>
+        </div>
+      )}
       <div className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />
@@ -1862,14 +1898,6 @@ export default function ReadingPage() {
             onClick={() => { setStarredOnly(!starredOnly); setPage(1); }}
           >
             <Star className="h-3.5 w-3.5 mr-1" /> 收藏
-          </Button>
-          <Button
-            size="sm"
-            variant={failedOnly ? "default" : "outline"}
-            className={failedOnly ? "bg-red-600 hover:bg-red-700" : "text-red-600 border-red-200"}
-            onClick={() => { setFailedOnly(!failedOnly); setPage(1); }}
-          >
-            ⚠️ 分析失败
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2">

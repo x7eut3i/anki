@@ -1,7 +1,8 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
+from zoneinfo import ZoneInfo
 
 from app.auth import get_current_user
 from app.database import get_session
@@ -144,7 +145,14 @@ def update_session_progress(
 
 @router.get("/stats", response_model=StudyStatsResponse)
 def get_stats(
+    tz: str | None = Query(None, description="IANA timezone, e.g. Asia/Shanghai"),
     service: ReviewService = Depends(_get_review_service),
 ):
-    stats = service.get_study_stats()
+    user_tz: ZoneInfo | None = None
+    if tz:
+        try:
+            user_tz = ZoneInfo(tz)
+        except Exception:
+            pass
+    stats = service.get_study_stats(tz=user_tz)
     return StudyStatsResponse(**stats)

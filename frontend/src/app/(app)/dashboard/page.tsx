@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/store";
 import { review, categories as catApi } from "@/lib/api";
+import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -31,7 +32,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token) return;
     Promise.all([
-      review.stats(token),
+      review.stats(token, getUserTimezone()),
       catApi.listAll(token),
       review.getActiveSession(token).catch(() => null),
     ])

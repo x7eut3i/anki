@@ -397,10 +397,20 @@ class ReviewService:
         self.session.refresh(study_session)
         return study_session
 
-    def get_study_stats(self) -> dict:
-        """Get comprehensive study statistics."""
+    def get_study_stats(self, tz=None) -> dict:
+        """Get comprehensive study statistics.
+
+        When *tz* (a ZoneInfo instance) is provided, "today" boundaries
+        are computed in the user's local timezone.
+        """
         now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        if tz:
+            now_local = datetime.now(tz)
+            today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = today_start_local.astimezone(timezone.utc)
+        else:
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Total cards (shared — all cards)
         total = self.session.exec(
@@ -485,13 +495,13 @@ class ReviewService:
         )
 
         # Streak (consecutive days with reviews)
-        streak = self._calculate_streak()
+        streak = self._calculate_streak(tz=tz)
 
         # Category stats
         cat_stats = self._get_category_stats()
 
         # Daily reviews (last 30 days)
-        daily_reviews = self._get_daily_reviews(30)
+        daily_reviews = self._get_daily_reviews(30, tz=tz)
 
         return {
             "total_cards": total,
@@ -506,41 +516,55 @@ class ReviewService:
             "daily_reviews": daily_reviews,
         }
 
-    def _calculate_streak(self) -> int:
+    def _calculate_streak(self, tz=None) -> int:
         """Calculate consecutive study days.
 
         If today has reviews, count today + consecutive past days.
         If today has no reviews yet, count from yesterday backwards
         (the user hasn't studied yet today but their streak isn't lost).
+
+        When *tz* (a ZoneInfo instance) is provided, "today" is defined in
+        the user's local timezone rather than UTC.  Day boundaries are
+        converted to UTC before querying the database.
         """
-        now = datetime.now(timezone.utc)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = today_start + timedelta(days=1)
+        if tz:
+            from zoneinfo import ZoneInfo
+            now_local = datetime.now(tz)
+        else:
+            now_local = datetime.now(timezone.utc)
+
+        today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start_local = today_start_local + timedelta(days=1)
+
+        # Convert local day boundaries to UTC for DB queries
+        today_start_utc = today_start_local.astimezone(timezone.utc)
+        tomorrow_start_utc = tomorrow_start_local.astimezone(timezone.utc)
 
         # Check if user has studied today
         today_count = self.session.exec(
             select(func.count()).where(
                 ReviewLog.user_id == self.user_id,
-                ReviewLog.reviewed_at >= today_start,
-                ReviewLog.reviewed_at < today_end,
+                ReviewLog.reviewed_at >= today_start_utc,
+                ReviewLog.reviewed_at < tomorrow_start_utc,
             )
         ).one()
 
         streak = 0
         if today_count > 0:
             streak = 1
-            check_date = today_start - timedelta(days=1)
+            check_date = today_start_local - timedelta(days=1)
         else:
             # Start from yesterday — streak not broken yet
-            check_date = today_start - timedelta(days=1)
+            check_date = today_start_local - timedelta(days=1)
 
         for _ in range(365):
-            end = check_date + timedelta(days=1)
+            day_start_utc = check_date.astimezone(timezone.utc)
+            day_end_utc = (check_date + timedelta(days=1)).astimezone(timezone.utc)
             count = self.session.exec(
                 select(func.count()).where(
                     ReviewLog.user_id == self.user_id,
-                    ReviewLog.reviewed_at >= check_date,
-                    ReviewLog.reviewed_at < end,
+                    ReviewLog.reviewed_at >= day_start_utc,
+                    ReviewLog.reviewed_at < day_end_utc,
                 )
             ).one()
             if count > 0:
@@ -607,24 +631,34 @@ class ReviewService:
             })
         return stats
 
-    def _get_daily_reviews(self, days: int) -> list[dict]:
-        """Get review counts for the last N days."""
-        now = datetime.now(timezone.utc)
+    def _get_daily_reviews(self, days: int, tz=None) -> list[dict]:
+        """Get review counts for the last N days.
+
+        When *tz* is provided, day boundaries are computed in the user's
+        local timezone.
+        """
+        if tz:
+            now_local = datetime.now(tz)
+        else:
+            now_local = datetime.now(timezone.utc)
+
         daily = []
         for i in range(days):
-            day_start = (now - timedelta(days=i)).replace(
+            day_start_local = (now_local - timedelta(days=i)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            day_end = day_start + timedelta(days=1)
+            day_end_local = day_start_local + timedelta(days=1)
+            day_start_utc = day_start_local.astimezone(timezone.utc)
+            day_end_utc = day_end_local.astimezone(timezone.utc)
             count = self.session.exec(
                 select(func.count()).where(
                     ReviewLog.user_id == self.user_id,
-                    ReviewLog.reviewed_at >= day_start,
-                    ReviewLog.reviewed_at < day_end,
+                    ReviewLog.reviewed_at >= day_start_utc,
+                    ReviewLog.reviewed_at < day_end_utc,
                 )
             ).one()
             daily.append({
-                "date": day_start.strftime("%Y-%m-%d"),
+                "date": day_start_local.strftime("%Y-%m-%d"),
                 "count": count,
             })
         return list(reversed(daily))

@@ -13,12 +13,18 @@ vi.mock("@/lib/api", () => ({
   },
   categories: {
     list: vi.fn(),
+    listAll: vi.fn(),
   },
+}));
+
+// Mock timezone
+vi.mock("@/lib/timezone", () => ({
+  getUserTimezone: () => "Asia/Shanghai",
 }));
 
 import { review, categories } from "@/lib/api";
 const mockStats = review.stats as ReturnType<typeof vi.fn>;
-const mockCatList = categories.list as ReturnType<typeof vi.fn>;
+const mockCatList = (categories as any).listAll as ReturnType<typeof vi.fn>;
 const mockGetActiveSession = review.getActiveSession as ReturnType<typeof vi.fn>;
 
 // Mock store
@@ -43,11 +49,16 @@ const sampleCats = [
   { id: 3, name: "马哲", icon: "📖", card_count: 30 },
 ];
 
+const sampleCatResponse = {
+  categories: sampleCats,
+  ai_categories: [],
+};
+
 describe("DashboardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStats.mockResolvedValue(sampleStats);
-    mockCatList.mockResolvedValue(sampleCats);
+    mockCatList.mockResolvedValue(sampleCatResponse);
     mockGetActiveSession.mockResolvedValue(null);
   });
 
@@ -112,10 +123,10 @@ describe("DashboardPage", () => {
   it("should display card count for categories", async () => {
     render(<DashboardPage />);
     await waitFor(() => {
-      expect(screen.getByText("50 张")).toBeInTheDocument();
+      expect(screen.getByText(/50 张/)).toBeInTheDocument();
     });
-    expect(screen.getByText("40 张")).toBeInTheDocument();
-    expect(screen.getByText("30 张")).toBeInTheDocument();
+    expect(screen.getByText(/40 张/)).toBeInTheDocument();
+    expect(screen.getByText(/30 张/)).toBeInTheDocument();
   });
 
   it("should show completion message when no cards due", async () => {

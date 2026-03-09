@@ -396,6 +396,242 @@ class BatchIdsRequest(BaseModel):
     delete_cards: bool = False
 
 
+# ── One-click repair ──
+
+@router.post("/repair")
+async def repair_failed_articles(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Find all articles with failed analysis or missing cards, and re-process them in background.
+
+    Logic:
+    - Analysis failed: quality_score == 0 and analysis_html contains error marker
+      → re-analyze + generate cards
+    - Analysis succeeded but no cards linked to source_url
+      → only generate cards
+    """
+    from app.models.card import Card
+    from app.routers.ai_jobs import create_job
+
+    config = session.exec(
+        select(AIConfig).where(
+            AIConfig.user_id == current_user.id,
+            AIConfig.is_enabled == True,
+        )
+    ).first()
+    if not config:
+        raise HTTPException(status_code=400, detail="请先在设置中配置AI服务")
+
+    # 1. Find analysis-failed articles
+    failed_articles = session.exec(
+        select(ArticleAnalysis).where(
+            ArticleAnalysis.quality_score == 0,
+            ArticleAnalysis.analysis_html.contains("AI分析失败"),  # type: ignore
+        )
+    ).all()
+
+    # 2. Find articles with successful analysis but no cards
+    analyzed_articles = session.exec(
+        select(ArticleAnalysis).where(
+            ArticleAnalysis.quality_score > 0,
+            ArticleAnalysis.analysis_json != "",
+            ArticleAnalysis.analysis_json != None,  # noqa: E711
+        )
+    ).all()
+
+    no_cards_articles = []
+    for a in analyzed_articles:
+        card_count = session.exec(
+            select(func.count()).select_from(Card).where(
+                Card.source == a.source_url,
+                Card.source != "",
+            )
+        ).one()
+        if card_count == 0:
+            no_cards_articles.append(a)
+
+    need_reanalyze = [a for a in failed_articles]
+    need_cards_only = [a for a in no_cards_articles if a.id not in {fa.id for fa in failed_articles}]
+
+    total = len(need_reanalyze) + len(need_cards_only)
+    if total == 0:
+        return {
+            "message": "没有需要修复的文章",
+            "total": 0,
+            "need_reanalyze": 0,
+            "need_cards_only": 0,
+            "job_id": None,
+        }
+
+    # Create a tracking job
+    job = create_job(
+        session, current_user.id, "batch_repair",
+        f"一键修复: {len(need_reanalyze)} 篇重新分析, {len(need_cards_only)} 篇补生成卡片",
+    )
+
+    # Collect IDs so we don't hold ORM objects across threads
+    reanalyze_ids = [a.id for a in need_reanalyze]
+    cards_only_ids = [a.id for a in need_cards_only]
+
+    background_tasks.add_task(
+        _bg_repair_articles,
+        job_id=job.id,
+        user_id=current_user.id,
+        config_id=config.id,
+        reanalyze_ids=reanalyze_ids,
+        cards_only_ids=cards_only_ids,
+    )
+
+    return {
+        "message": f"修复任务已启动",
+        "total": total,
+        "need_reanalyze": len(reanalyze_ids),
+        "need_cards_only": len(cards_only_ids),
+        "job_id": job.id,
+    }
+
+
+def _bg_repair_articles(
+    job_id: int,
+    user_id: int,
+    config_id: int,
+    reanalyze_ids: list[int],
+    cards_only_ids: list[int],
+):
+    """Background thread: repair all failed articles."""
+    import asyncio
+    asyncio.run(_bg_repair_articles_async(
+        job_id, user_id, config_id, reanalyze_ids, cards_only_ids,
+    ))
+
+
+async def _bg_repair_articles_async(
+    job_id: int,
+    user_id: int,
+    config_id: int,
+    reanalyze_ids: list[int],
+    cards_only_ids: list[int],
+):
+    """Async implementation for batch repair."""
+    from app.database import engine
+    from app.routers.ai_jobs import update_job_status
+    from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
+
+    total = len(reanalyze_ids) + len(cards_only_ids)
+    success_analyze = 0
+    success_cards = 0
+    failed_count = 0
+    processed = 0
+
+    update_job_status(job_id, "running", progress=5)
+
+    with Session(engine) as session:
+        config = session.get(AIConfig, config_id)
+        if not config:
+            update_job_status(job_id, "failed", error_message="AI配置不存在")
+            return
+
+        # Phase 1: Re-analyze failed articles
+        for aid in reanalyze_ids:
+            try:
+                article = session.get(ArticleAnalysis, aid)
+                if not article:
+                    failed_count += 1
+                    processed += 1
+                    continue
+
+                # Re-run AI analysis
+                analysis_data = await ai_analyze_article(
+                    session, config,
+                    title=article.title, content=article.content,
+                    user_id=user_id,
+                )
+
+                if analysis_data:
+                    article.analysis_html = _build_analysis_html(article.title, analysis_data)
+                    article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
+                    article.quality_score = analysis_data.get("quality_score", 0)
+                    article.quality_reason = analysis_data.get("quality_reason", "")
+                    from datetime import datetime as dt_, timezone as tz_
+                    article.updated_at = dt_.now(tz_.utc)
+                    session.add(article)
+                    session.commit()
+                    success_analyze += 1
+
+                    # Also generate cards for re-analyzed articles
+                    try:
+                        cards_created, _ = await ai_generate_cards(
+                            session, config,
+                            title=article.title,
+                            content=article.content,
+                            source_url=article.source_url or "",
+                            user_id=user_id,
+                        )
+                        if cards_created > 0:
+                            success_cards += cards_created
+                    except Exception as e:
+                        logger.warning("Card generation failed during repair for article %d: %s", aid, e)
+                else:
+                    failed_count += 1
+            except Exception as e:
+                logger.error("Repair re-analysis failed for article %d: %s", aid, e)
+                failed_count += 1
+
+            processed += 1
+            progress = int(5 + (processed / total) * 90)
+            update_job_status(job_id, "running", progress=progress)
+
+        # Phase 2: Generate cards for articles that have analysis but no cards
+        for aid in cards_only_ids:
+            try:
+                article = session.get(ArticleAnalysis, aid)
+                if not article:
+                    failed_count += 1
+                    processed += 1
+                    continue
+
+                cards_created, _ = await ai_generate_cards(
+                    session, config,
+                    title=article.title,
+                    content=article.content,
+                    source_url=article.source_url or "",
+                    user_id=user_id,
+                )
+                if cards_created > 0:
+                    success_cards += cards_created
+                    success_analyze += 1  # count as success for the article
+                else:
+                    failed_count += 1
+            except Exception as e:
+                logger.error("Repair card generation failed for article %d: %s", aid, e)
+                failed_count += 1
+
+            processed += 1
+            progress = int(5 + (processed / total) * 90)
+            update_job_status(job_id, "running", progress=progress)
+
+    # Final status
+    result_msg = f"修复完成: {success_analyze} 篇成功, {failed_count} 篇失败, 共生成 {success_cards} 张卡片"
+    if failed_count > 0:
+        update_job_status(job_id, "completed", progress=100,
+                          result_json=json.dumps({
+                              "success_articles": success_analyze,
+                              "failed": failed_count,
+                              "cards_created": success_cards,
+                              "message": result_msg,
+                          }))
+    else:
+        update_job_status(job_id, "completed", progress=100,
+                          result_json=json.dumps({
+                              "success_articles": success_analyze,
+                              "failed": 0,
+                              "cards_created": success_cards,
+                              "message": result_msg,
+                          }))
+
+
 @router.post("/batch-delete")
 def batch_delete(
     data: BatchIdsRequest,

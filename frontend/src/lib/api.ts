@@ -194,8 +194,8 @@ export const review = {
       token,
     }),
 
-  stats: (token: string) =>
-    request<any>("/api/review/stats", { token }),
+  stats: (token: string, tz?: string) =>
+    request<any>(`/api/review/stats${tz ? `?tz=${encodeURIComponent(tz)}` : ''}`, { token }),
 };
 
 // ---------------------------------------------------------------------------
@@ -443,6 +443,9 @@ export const reading = {
 
   batchReanalyze: (ids: number[], token: string) =>
     request<{ success: number; failed: number; total: number }>("/api/reading/batch-reanalyze", { method: "POST", body: JSON.stringify({ ids }), token }),
+
+  repair: (token: string) =>
+    request<{ message: string; total: number; need_reanalyze: number; need_cards_only: number; job_id: number | null }>("/api/reading/repair", { method: "POST", token }),
 
   // Article-linked cards
   getArticleCards: (analysisId: number, token: string) =>
