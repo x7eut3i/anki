@@ -22,14 +22,11 @@ RUN pip install --no-cache-dir . && rm -rf /root/.cache
 
 # Copy application code
 COPY backend/app/ ./app/
+COPY backend/manage_users.py ./manage_users.py
 
 # Copy frontend static export
 COPY --from=frontend /build/out ./static/
 
-# Persistent data directory for SQLite
-RUN mkdir -p /data
-
-ENV DATABASE_URL=sqlite:////data/anki.db
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

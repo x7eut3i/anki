@@ -21,19 +21,18 @@ services:
       - "${PORT:-8000}:8000"
     volumes:
       # Persistent SQLite database
-      - ./data:/app/data
+      - anki-data:/data
+      # Mount AI config at runtime (contains API key — NOT baked into image)
+      - ./ai_config.json:/app/ai_config.json:ro
     environment:
-      - DATABASE_URL=sqlite:////app/data/anki.db
-    networks:
-      - shared-net
-#    healthcheck:
-#      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
-#      interval: 30s
-#      timeout: 10s
-#      retries: 3
-#      start_period: 15s
+      - DATABASE_URL=sqlite:///data/anki.db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
-networks:
-  shared-net:
-    external: true
-    name: nginx-net
+volumes:
+  anki-data:
+    driver: local
