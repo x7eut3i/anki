@@ -43,6 +43,7 @@ interface ConfigProfile {
   max_tokens: number;
   temperature: number;
   max_retries: number;
+  ai_timeout: number;
   is_enabled: boolean;
   is_active: boolean;
 }
@@ -71,6 +72,7 @@ export default function AIPage() {
   const [maxTokens, setMaxTokens] = useState(8192);
   const [temperature, setTemperature] = useState(0.3);
   const [maxRetries, setMaxRetries] = useState(3);
+  const [aiTimeout, setAiTimeout] = useState(300);
   const [fallbackModel, setFallbackModel] = useState("");
   const [fallbackCooldown, setFallbackCooldown] = useState(600);
   const [rpmLimit, setRpmLimit] = useState(0);
@@ -124,6 +126,7 @@ export default function AIPage() {
     setMaxTokens(p.max_tokens || 8192);
     setTemperature(p.temperature ?? 0.3);
     setMaxRetries(p.max_retries ?? 3);
+    setAiTimeout(p.ai_timeout ?? 300);
     setFallbackModel(p.fallback_model || "");
     setFallbackCooldown(p.fallback_cooldown || 600);
     setRpmLimit(p.rpm_limit || 0);
@@ -203,6 +206,7 @@ export default function AIPage() {
         max_tokens: maxTokens,
         temperature: temperature,
         max_retries: maxRetries,
+        ai_timeout: aiTimeout,
         fallback_model: fallbackModel,
         fallback_cooldown: fallbackCooldown,
         rpm_limit: rpmLimit,
@@ -578,6 +582,19 @@ export default function AIPage() {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 AI调用失败后最大重试次数。每次重试间隔递增（指数退避）。默认 3 次
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium">AI 请求超时 (Timeout, 秒)</label>
+              <Input
+                type="number"
+                value={aiTimeout}
+                onChange={(e) => setAiTimeout(parseInt(e.target.value) || 300)}
+                min={30}
+                max={600}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                单次AI请求的最大等待时间（秒）。长文章建议 300-600。默认 300 秒
               </p>
             </div>
 

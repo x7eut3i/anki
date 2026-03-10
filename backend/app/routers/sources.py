@@ -316,7 +316,7 @@ async def test_source(
                     ).first()
                     if ai_config and first_body:
                         from app.services.ai_pipeline import ai_cleanup_content
-                        first_body = await ai_cleanup_content(
+                        first_body, _ = await ai_cleanup_content(
                             ai_config, art["title"], first_body,
                             current_user.id,
                             source="crawl",

@@ -52,6 +52,9 @@ export default function StudyPage() {
   const [bufferedAnswers, setBufferedAnswers] = useState<{ card_id: number; rating: number; review_duration_ms?: number }[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Track which rating was given per card (for highlighting when navigating back)
+  const [ratingsMap, setRatingsMap] = useState<Record<number, number>>({});
+
   // All tags cache — fetched once at page load
   const [allTagsCache, setAllTagsCache] = useState<any[]>([]);
 
@@ -331,7 +334,8 @@ export default function StudyPage() {
     if (!token || bufferedAnswers.length === 0) return;
     autoSaveFiredRef.current = true;
     // Use fetch with keepalive for reliability during page unload
-    fetch("/api/review/batch-answer", {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+    fetch(`${apiBase}/api/review/batch-answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ answers: bufferedAnswers, session_id: sessionId }),
@@ -346,7 +350,21 @@ export default function StudyPage() {
   useEffect(() => {
     const handleBeforeUnload = () => autoSaveStudyRef.current?.();
 
+    // visibilitychange fires when user switches tabs, minimizes app, or
+    // navigates away on mobile (SPA nav via bottom navigator triggers this
+    // because the new route's paint makes the old component invisible).
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        autoSaveStudyRef.current?.();
+      }
+    };
+
+    // pagehide is the modern replacement for beforeunload on mobile Safari
+    const handlePageHide = () => autoSaveStudyRef.current?.();
+
     window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
 
     // Periodic auto-flush every 15s so server stays in sync
     // (uses flushAnswers which clears buffer and resets autoSaveFiredRef)
@@ -359,6 +377,8 @@ export default function StudyPage() {
       // Save on unmount (SPA route change)
       autoSaveStudyRef.current?.();
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, []);
 
@@ -373,6 +393,9 @@ export default function StudyPage() {
       const filtered = prev.filter(a => a.card_id !== card.id);
       return [...filtered, answerData];
     });
+
+    // Track rating for this card (used for highlighting when navigating back)
+    setRatingsMap(prev => ({ ...prev, [card.id]: rating }));
 
     markReviewed(currentIndex);
 
@@ -601,6 +624,8 @@ export default function StudyPage() {
         onRate={handleRate}
         preview={card.scheduling_preview}
         forceType={forceTypeMap[card.id]}
+        readOnly={isCurrentReviewed}
+        selectedRating={ratingsMap[card.id] ?? null}
         articleMap={card.source && card.article_id ? { [card.source]: { id: card.article_id, title: card.article_title, quality_score: card.article_quality_score, source_name: card.article_source_name } } : undefined}
         tagPanel={
           <CardTagManager

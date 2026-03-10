@@ -22,6 +22,7 @@ class AIConfig(SQLModel, table=True):
     max_tokens: int = Field(default=8192)
     temperature: float = Field(default=0.3)
     max_retries: int = Field(default=3)  # AI call retry count
+    ai_timeout: int = Field(default=300)  # AI request timeout in seconds (default 5min)
     is_enabled: bool = Field(default=False)
 
     # Feature toggles

@@ -177,6 +177,7 @@ def list_analyses(
             "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
             "tags_list": article_tag_map.get(item.id, []),
             "card_count": card_count_map.get(item.source_url, 0),
+            "error_state": item.error_state or 0,
         })
 
     return {"items": result, "total": total, "page": page, "page_size": page_size, "source_names": source_names}
@@ -299,6 +300,7 @@ def get_analysis(
         "updated_at": item.updated_at.isoformat(),
         "finished_at": item.finished_at.isoformat() if item.finished_at else None,
         "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
+        "error_state": item.error_state or 0,
     }
 
 
@@ -488,15 +490,14 @@ async def repair_failed_articles(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Find all articles with failed analysis or missing cards, and re-process them in background.
+    """Find all articles with error_state flags and re-process them in background.
 
-    Logic:
-    - Analysis failed: quality_score == 0 and analysis_html contains error marker
-      → re-analyze + generate cards
-    - Analysis succeeded but no cards linked to source_url
-      → only generate cards
+    Uses error_state bit flags to determine what repair is needed:
+    - CLEANUP_FAILED (bit 0): re-run content cleanup → re-analyze → generate cards
+    - ANALYSIS_FAILED (bit 1): re-analyze → generate cards
+    - CARD_GEN_FAILED (bit 2): only generate cards
     """
-    from app.models.card import Card
+    from app.models.article_analysis import ArticleErrorState
     from app.routers.ai_jobs import create_job
 
     config = session.exec(
@@ -508,36 +509,24 @@ async def repair_failed_articles(
     if not config:
         raise HTTPException(status_code=400, detail="请先在设置中配置AI服务")
 
-    # 1. Find analysis-failed articles
-    failed_articles = session.exec(
+    # Find all articles with error_state flags set
+    all_error_articles = session.exec(
         select(ArticleAnalysis).where(
-            ArticleAnalysis.quality_score == 0,
-            ArticleAnalysis.analysis_html.contains("AI分析失败"),  # type: ignore
+            col(ArticleAnalysis.error_state) > 0,  # type: ignore
         )
     ).all()
 
-    # 2. Find articles with successful analysis but no cards
-    analyzed_articles = session.exec(
-        select(ArticleAnalysis).where(
-            ArticleAnalysis.quality_score > 0,
-            ArticleAnalysis.analysis_json != "",
-            ArticleAnalysis.analysis_json != None,  # noqa: E711
-        )
-    ).all()
+    # Categorize by what repair is needed
+    need_cleanup = []   # CLEANUP_FAILED — redo cleanup + analysis + cards
+    need_reanalyze = [] # ANALYSIS_FAILED — redo analysis + cards
+    need_cards_only = [] # CARD_GEN_FAILED only — just redo cards
 
-    no_cards_articles = []
-    for a in analyzed_articles:
-        card_count = session.exec(
-            select(func.count()).select_from(Card).where(
-                Card.source == a.source_url,
-                Card.source != "",
-            )
-        ).one()
-        if card_count == 0:
-            no_cards_articles.append(a)
-
-    need_reanalyze = [a for a in failed_articles]
-    need_cards_only = [a for a in no_cards_articles if a.id not in {fa.id for fa in failed_articles}]
+    for a in all_error_articles:
+        es = a.error_state or 0
+        if es & ArticleErrorState.CLEANUP_FAILED or es & ArticleErrorState.ANALYSIS_FAILED:
+            need_reanalyze.append(a)
+        elif es & ArticleErrorState.CARD_GEN_FAILED:
+            need_cards_only.append(a)
 
     total = len(need_reanalyze) + len(need_cards_only)
     if total == 0:
@@ -607,6 +596,7 @@ async def _bg_repair_articles_async(
     from app.database import engine
     from app.routers.ai_jobs import update_job_status
     from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
+    from app.models.article_analysis import ArticleErrorState
     from datetime import datetime as dt_, timezone as tz_
 
     total = len(reanalyze_ids) + len(cards_only_ids)
@@ -642,6 +632,8 @@ async def _bg_repair_articles_async(
                     art_content = article.content
                     art_source_url = article.source_url or ""
 
+                    old_error_state = article.error_state or 0
+
                     if needs_analysis:
                         analysis_data = await ai_analyze_article(
                             task_session, config,
@@ -654,6 +646,10 @@ async def _bg_repair_articles_async(
                             article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
                             article.quality_score = analysis_data.get("quality_score", 0)
                             article.quality_reason = analysis_data.get("quality_reason", "")
+                            # Clear cleanup & analysis failure flags
+                            article.error_state = old_error_state & ~(
+                                ArticleErrorState.CLEANUP_FAILED | ArticleErrorState.ANALYSIS_FAILED
+                            )
                             article.updated_at = dt_.now(tz_.utc)
                             task_session.add(article)
                             task_session.commit()
@@ -667,11 +663,22 @@ async def _bg_repair_articles_async(
                                     source_url=art_source_url,
                                     user_id=user_id, source="reading",
                                 )
+                                # Clear card gen failure flag
+                                article.error_state = article.error_state & ~ArticleErrorState.CARD_GEN_FAILED
+                                task_session.add(article)
+                                task_session.commit()
                                 async with state_lock:
                                     success_cards += cards_created
                             except Exception as e:
                                 logger.warning("Card generation failed during repair for article %d: %s", aid, e)
+                                article.error_state = article.error_state | ArticleErrorState.CARD_GEN_FAILED
+                                task_session.add(article)
+                                task_session.commit()
                         else:
+                            # Analysis still failed — keep/set the flag
+                            article.error_state = old_error_state | ArticleErrorState.ANALYSIS_FAILED
+                            task_session.add(article)
+                            task_session.commit()
                             async with state_lock:
                                 failed_count += 1
                     else:
@@ -683,6 +690,11 @@ async def _bg_repair_articles_async(
                                 source_url=art_source_url,
                                 user_id=user_id, source="reading",
                             )
+                            if cards_created > 0:
+                                # Clear card gen failure flag
+                                article.error_state = old_error_state & ~ArticleErrorState.CARD_GEN_FAILED
+                                task_session.add(article)
+                                task_session.commit()
                             async with state_lock:
                                 if cards_created > 0:
                                     success_cards += cards_created
@@ -691,6 +703,9 @@ async def _bg_repair_articles_async(
                                     failed_count += 1
                         except Exception as e:
                             logger.error("Card generation failed for article %d: %s", aid, e)
+                            article.error_state = old_error_state | ArticleErrorState.CARD_GEN_FAILED
+                            task_session.add(article)
+                            task_session.commit()
                             async with state_lock:
                                 failed_count += 1
             except Exception as e:
@@ -1295,7 +1310,7 @@ async def fetch_url_content(
         ).first()
         if config and content:
             from app.services.ai_pipeline import ai_cleanup_content
-            content = await ai_cleanup_content(
+            content, _ = await ai_cleanup_content(
                 config, title, content, current_user.id,
                 source="reading",
             )

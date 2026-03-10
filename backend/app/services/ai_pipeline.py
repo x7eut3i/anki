@@ -193,6 +193,10 @@ def _cfg_max_tokens(config) -> int:
 def _cfg_max_retries(config) -> int:
     return getattr(config, "max_retries", 3) or 3
 
+def _cfg_timeout(config) -> float:
+    """Get AI request timeout from config (seconds). Default 300s."""
+    return float(getattr(config, "ai_timeout", 300) or 300)
+
 
 async def _ai_call_with_retry(
     url: str,
@@ -351,10 +355,11 @@ async def ai_cleanup_content(
     body_text: str,
     user_id: int,
     source: str = "",
-) -> str:
+) -> tuple[str, bool]:
     """Clean up raw article text using AI.
 
-    Returns cleaned text, or original body_text on failure.
+    Returns (cleaned_text, success) tuple.
+    On failure, returns (original_body_text, False).
     """
     cleanup_model = _get_effective_model(config, config.model or "gpt-4o-mini")
     cleanup_sys = (
@@ -392,13 +397,14 @@ async def ai_cleanup_content(
     }
 
     cleaned = body_text
+    cleanup_ok = True
     try:
         log_ai_request("content_cleanup", cleanup_model, payload["messages"], temp, max_tokens)
         t0 = time.time()
         result = await _ai_call_with_retry(
             url, payload, headers,
             max_retries=_cfg_max_retries(config),
-            timeout=60.0,
+            timeout=_cfg_timeout(config),
             feature="content_cleanup",
             config=config,
         )
@@ -425,8 +431,9 @@ async def ai_cleanup_content(
             user_id=user_id, source=source,
             raw_response=str(e),
         )
+        cleanup_ok = False
 
-    return cleaned
+    return cleaned, cleanup_ok
 
 
 async def ai_analyze_article(
@@ -476,7 +483,7 @@ async def ai_analyze_article(
             result = await _ai_call_with_retry(
                 url, payload, headers,
                 max_retries=1,  # inner retry handled by outer loop for error logging
-                timeout=120.0,
+                timeout=_cfg_timeout(config),
                 feature="article_analysis",
                 config=config,
             )
@@ -593,7 +600,7 @@ async def ai_generate_cards(
             result = await _ai_call_with_retry(
                 url, payload, headers,
                 max_retries=1,
-                timeout=120.0,
+                timeout=_cfg_timeout(config),
                 feature="card_generation",
                 config=config,
             )

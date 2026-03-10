@@ -1,7 +1,20 @@
 """Article analysis model for deep reading feature."""
 
 from datetime import datetime, timezone
+from enum import IntFlag
 from sqlmodel import SQLModel, Field
+
+
+class ArticleErrorState(IntFlag):
+    """Bit flags for article processing error states.
+
+    Each bit represents a failed processing stage. Multiple bits can be set.
+    0 = no errors (all stages succeeded or not yet attempted).
+    """
+    NONE = 0
+    CLEANUP_FAILED = 1       # bit 0: content_cleanup failed
+    ANALYSIS_FAILED = 2      # bit 1: AI article analysis failed
+    CARD_GEN_FAILED = 4      # bit 2: card generation failed
 
 
 class ArticleAnalysis(SQLModel, table=True):
@@ -31,6 +44,9 @@ class ArticleAnalysis(SQLModel, table=True):
     # Reading status
     status: str = Field(default="new")  # new, reading, finished, archived
     is_starred: bool = Field(default=False)
+
+    # Error state — bit flags (0 = no errors)
+    error_state: int = Field(default=0)  # ArticleErrorState flags
 
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

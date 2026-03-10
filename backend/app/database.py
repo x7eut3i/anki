@@ -103,6 +103,8 @@ def _migrate_add_columns():
         ("study_sessions", "current_question", "INTEGER DEFAULT 0"),
         ("study_sessions", "quiz_answer_map", "TEXT DEFAULT '{}'"),
         ("article_analyses", "last_read_at", "TIMESTAMP"),
+        ("article_analyses", "error_state", "INTEGER DEFAULT 0"),
+        ("ai_configs", "ai_timeout", "INTEGER DEFAULT 300"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

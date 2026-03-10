@@ -14,6 +14,7 @@ class AIConfigUpdate(BaseModel):
     max_tokens: int | None = None
     temperature: float | None = None
     max_retries: int | None = None
+    ai_timeout: int | None = None
     fallback_model: str | None = None
     fallback_cooldown: int | None = None
     rpm_limit: int | None = None
@@ -39,6 +40,7 @@ class AIConfigResponse(BaseModel):
     max_tokens: int = 8192
     temperature: float = 0.3
     max_retries: int = 3
+    ai_timeout: int = 300
     is_enabled: bool
     is_active: bool = True
     auto_explain_wrong: bool
@@ -64,6 +66,7 @@ class AIConfigCreate(BaseModel):
     max_tokens: int = 8192
     temperature: float = 0.3
     max_retries: int = 3
+    ai_timeout: int = 300
 
 
 class AITestRequest(BaseModel):

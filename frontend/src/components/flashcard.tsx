@@ -27,6 +27,7 @@ interface FlashcardProps {
   forceType?: "qa" | "choice";  // Override question type display regardless of distractors
   tagPanel?: React.ReactNode;  // Optional tag management panel to render inside
   readOnly?: boolean;  // If true, show answer but hide rating buttons (browsing history)
+  selectedRating?: number | null;  // Rating previously given for this card (1-4)
   articleMap?: Record<string, { id: number; title: string; quality_score: number; source_name: string }>;  // Pre-loaded article info keyed by source URL
 }
 
@@ -58,6 +59,7 @@ export default function Flashcard({
   forceType,
   tagPanel,
   readOnly = false,
+  selectedRating,
   articleMap,
 }: FlashcardProps) {
   const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
@@ -299,24 +301,32 @@ export default function Flashcard({
       {showRatings && onRate && (
         <div className="mt-6 fixed bottom-0 md:bottom-0 left-0 md:left-64 right-0 bg-background/95 backdrop-blur-sm border-t p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] z-[55] mobile-rating-bottom">
           <div className="grid grid-cols-4 gap-2 max-w-2xl mx-auto">
-            {RATING_LABELS.map((r) => (
-              <Button
-                key={r.value}
-                variant="ghost"
-                className={cn("flex-col gap-1 h-auto py-3", r.className)}
-                onClick={() => {
-                  onRate(r.value);
-                }}
-              >
-                <span className="text-base font-bold">{r.label}</span>
-                <span className={cn("text-[10px] min-h-[14px]", preview && showAnswer ? "opacity-80" : "opacity-0")}>
-                  {(preview && preview[String(r.value)]) || "\u00A0"}
-                </span>
-                <kbd className="text-[10px] opacity-60 bg-black/10 px-1 rounded">
-                  {r.shortcut}
-                </kbd>
-              </Button>
-            ))}
+            {RATING_LABELS.map((r) => {
+              const isSelected = readOnly && selectedRating === r.value;
+              return (
+                <Button
+                  key={r.value}
+                  variant="ghost"
+                  className={cn(
+                    "flex-col gap-1 h-auto py-3",
+                    r.className,
+                    readOnly && !isSelected && "opacity-30",
+                    isSelected && "ring-2 ring-offset-2 ring-yellow-400 scale-105",
+                  )}
+                  onClick={() => {
+                    onRate(r.value);
+                  }}
+                >
+                  <span className="text-base font-bold">{r.label}</span>
+                  <span className={cn("text-[10px] min-h-[14px]", preview && showAnswer ? "opacity-80" : "opacity-0")}>
+                    {(preview && preview[String(r.value)]) || "\u00A0"}
+                  </span>
+                  <kbd className="text-[10px] opacity-60 bg-black/10 px-1 rounded">
+                    {r.shortcut}
+                  </kbd>
+                </Button>
+              );
+            })}
           </div>
         </div>
       )}

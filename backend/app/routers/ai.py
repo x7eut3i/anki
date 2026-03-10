@@ -50,6 +50,7 @@ def _config_to_response(config: AIConfig) -> AIConfigResponse:
         max_tokens=getattr(config, "max_tokens", 8192) or 8192,
         temperature=getattr(config, "temperature", 0.3) or 0.3,
         max_retries=getattr(config, "max_retries", 3) or 3,
+        ai_timeout=getattr(config, "ai_timeout", 300) or 300,
         is_enabled=config.is_enabled,
         is_active=getattr(config, "is_active", True),
         auto_explain_wrong=config.auto_explain_wrong,

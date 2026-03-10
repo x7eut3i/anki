@@ -73,6 +73,22 @@ interface AnalysisItem {
   updated_at: string;
   tags_list?: { id: number; name: string; color: string }[];
   card_count?: number;
+  error_state?: number;
+}
+
+/* error_state bit flags — must match backend ArticleErrorState */
+const ERROR_STATE = {
+  CLEANUP_FAILED: 1,
+  ANALYSIS_FAILED: 2,
+  CARD_GEN_FAILED: 4,
+} as const;
+
+function errorStateBadges(es: number) {
+  const badges: { label: string; color: string }[] = [];
+  if (es & ERROR_STATE.CLEANUP_FAILED) badges.push({ label: "清洗失败", color: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400" });
+  if (es & ERROR_STATE.ANALYSIS_FAILED) badges.push({ label: "分析失败", color: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400" });
+  if (es & ERROR_STATE.CARD_GEN_FAILED) badges.push({ label: "生成卡片失败", color: "bg-yellow-100 text-yellow-700 dark:bg-yellow-950/40 dark:text-yellow-400" });
+  return badges;
 }
 
 interface Highlight {
@@ -1355,6 +1371,11 @@ export default function ReadingPage() {
                   )}
                   {detail.publish_date && <span>{detail.publish_date}</span>}
                   <QualityBadge score={detail.quality_score} />
+                  {(detail.error_state ?? 0) > 0 && errorStateBadges(detail.error_state!).map((b, i) => (
+                    <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-medium ${b.color}`}>
+                      ⚠ {b.label}
+                    </span>
+                  ))}
                   {detail.quality_reason && (
                     <span className="text-xs text-muted-foreground">— {detail.quality_reason}</span>
                   )}
@@ -2162,6 +2183,11 @@ export default function ReadingPage() {
                       {(item.card_count ?? 0) > 0 && (
                         <span className="text-primary">🃏 {item.card_count} 张卡片</span>
                       )}
+                      {(item.error_state ?? 0) > 0 && errorStateBadges(item.error_state!).map((b, i) => (
+                        <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
+                          ⚠ {b.label}
+                        </span>
+                      ))}
                       <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
                     {/* Article tags */}

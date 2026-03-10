@@ -60,6 +60,7 @@ export default function IngestionPage() {
   const [expandedLog, setExpandedLog] = useState<number | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<number | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [cancelledLogId, setCancelledLogId] = useState<number | null>(null);  // tracks log awaiting cancellation
   const isAdmin = user?.is_admin;
 
   const loadData = async () => {
@@ -96,6 +97,10 @@ export default function IngestionPage() {
         const runningLog = logsData.find((l: IngestionLog) => l.status === "running");
         if (runningLog && !expandedLog) {
           setExpandedLog(runningLog.id);
+        }
+        // Clear cancellation state if the log is no longer running
+        if (cancelledLogId && !logsData.some((l: IngestionLog) => l.id === cancelledLogId && l.status === "running")) {
+          setCancelledLogId(null);
         }
         // Stop polling if nothing is running anymore
         if (!logsData.some((l: IngestionLog) => l.status === "running")) {
@@ -156,6 +161,7 @@ export default function IngestionPage() {
     try {
       await ingestion.cancel(logId, token);
       setConfirmCancelId(null);
+      setCancelledLogId(logId);  // Show "cancelling" state until poll picks up status change
       // Polling will pick up the status change
     } catch (err: any) {
       alert("取消失败: " + (err?.message || "未知错误"));
@@ -492,7 +498,12 @@ export default function IngestionPage() {
                     {/* Cancel button — inline confirm, not modal */}
                     {isRunning && isAdmin && (
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        {confirmCancelId === log.id ? (
+                        {cancelledLogId === log.id ? (
+                          <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/30 px-2 py-1 rounded">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            正在取消...
+                          </span>
+                        ) : confirmCancelId === log.id ? (
                           <>
                             <Button
                               variant="destructive"
