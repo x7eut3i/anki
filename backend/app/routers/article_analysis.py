@@ -516,65 +516,67 @@ async def repair_failed_articles(
         )
     ).all()
 
-    # Categorize by what repair is needed (priority order)
-    need_cleanup = []    # CLEANUP_FAILED → redo cleanup + analysis + cards
-    need_reanalyze = []  # ANALYSIS_FAILED (no CLEANUP_FAILED) → redo analysis + cards
-    need_cards_only = [] # CARD_GEN_FAILED only → just redo cards
+    # ONE task per article — mode = earliest failed step (cascades forward)
+    # Count per-bit for display (an article may have multiple bits set)
+    repair_items: list[tuple[int, str]] = []  # (article_id, mode)
+    count_cleanup = 0
+    count_analysis = 0
+    count_cards = 0
 
     for a in all_error_articles:
         es = a.error_state or 0
+        # Count per-bit for display
         if es & ArticleErrorState.CLEANUP_FAILED:
-            need_cleanup.append(a)
+            count_cleanup += 1
+        if es & ArticleErrorState.ANALYSIS_FAILED:
+            count_analysis += 1
+        if es & ArticleErrorState.CARD_GEN_FAILED:
+            count_cards += 1
+        # Determine ONE repair mode — earliest failed step
+        if es & ArticleErrorState.CLEANUP_FAILED:
+            repair_items.append((a.id, "cleanup"))
         elif es & ArticleErrorState.ANALYSIS_FAILED:
-            need_reanalyze.append(a)
+            repair_items.append((a.id, "reanalyze"))
         elif es & ArticleErrorState.CARD_GEN_FAILED:
-            need_cards_only.append(a)
+            repair_items.append((a.id, "cards_only"))
 
-    total = len(need_cleanup) + len(need_reanalyze) + len(need_cards_only)
-    if total == 0:
+    if not repair_items:
         return {
             "message": "没有需要修复的文章",
             "total": 0,
-            "need_cleanup": 0,
-            "need_reanalyze": 0,
-            "need_cards_only": 0,
+            "count_cleanup": 0,
+            "count_analysis": 0,
+            "count_cards": 0,
             "job_id": None,
         }
 
     # Create a tracking job
     parts = []
-    if need_cleanup:
-        parts.append(f"{len(need_cleanup)} 篇重新清洗+分析")
-    if need_reanalyze:
-        parts.append(f"{len(need_reanalyze)} 篇重新分析")
-    if need_cards_only:
-        parts.append(f"{len(need_cards_only)} 篇补生成卡片")
+    if count_cleanup:
+        parts.append(f"{count_cleanup} 篇清洗失败")
+    if count_analysis:
+        parts.append(f"{count_analysis} 篇分析失败")
+    if count_cards:
+        parts.append(f"{count_cards} 篇卡片生成失败")
     job = create_job(
         session, current_user.id, "batch_repair",
         f"一键修复: {', '.join(parts)}",
     )
-
-    # Collect IDs so we don't hold ORM objects across threads
-    cleanup_ids = [a.id for a in need_cleanup]
-    reanalyze_ids = [a.id for a in need_reanalyze]
-    cards_only_ids = [a.id for a in need_cards_only]
 
     background_tasks.add_task(
         _bg_repair_articles,
         job_id=job.id,
         user_id=current_user.id,
         config_id=config.id,
-        cleanup_ids=cleanup_ids,
-        reanalyze_ids=reanalyze_ids,
-        cards_only_ids=cards_only_ids,
+        repair_items=repair_items,
     )
 
     return {
-        "message": f"修复任务已启动",
-        "total": total,
-        "need_cleanup": len(cleanup_ids),
-        "need_reanalyze": len(reanalyze_ids),
-        "need_cards_only": len(cards_only_ids),
+        "message": "修复任务已启动",
+        "total": len(repair_items),
+        "count_cleanup": count_cleanup,
+        "count_analysis": count_analysis,
+        "count_cards": count_cards,
         "job_id": job.id,
     }
 
@@ -583,14 +585,12 @@ def _bg_repair_articles(
     job_id: int,
     user_id: int,
     config_id: int,
-    cleanup_ids: list[int],
-    reanalyze_ids: list[int],
-    cards_only_ids: list[int],
+    repair_items: list[tuple[int, str]],
 ):
     """Background thread: repair all failed articles."""
     import asyncio
     asyncio.run(_bg_repair_articles_async(
-        job_id, user_id, config_id, cleanup_ids, reanalyze_ids, cards_only_ids,
+        job_id, user_id, config_id, repair_items,
     ))
 
 
@@ -598,16 +598,14 @@ async def _bg_repair_articles_async(
     job_id: int,
     user_id: int,
     config_id: int,
-    cleanup_ids: list[int],
-    reanalyze_ids: list[int],
-    cards_only_ids: list[int],
+    repair_items: list[tuple[int, str]],
 ):
     """Async implementation for batch repair.
 
-    Three repair modes:
-    - cleanup_ids: re-run cleanup → re-analyze → generate cards
-    - reanalyze_ids: re-analyze → generate cards (content already clean)
-    - cards_only_ids: only generate cards (analysis already done)
+    Each article gets exactly ONE task based on its earliest failed step:
+    - cleanup: re-run cleanup → re-analyze → generate cards
+    - reanalyze: re-analyze → generate cards (content already clean)
+    - cards_only: only generate cards (analysis already done)
 
     Processes articles concurrently — each task gets its own DB session
     so SQLite is never accessed concurrently from the same connection.
@@ -619,7 +617,7 @@ async def _bg_repair_articles_async(
     from app.models.article_analysis import ArticleErrorState
     from datetime import datetime as dt_, timezone as tz_
 
-    total = len(cleanup_ids) + len(reanalyze_ids) + len(cards_only_ids)
+    total = len(repair_items)
     success_analyze = 0
     success_cards = 0
     failed_count = 0
@@ -745,11 +743,7 @@ async def _bg_repair_articles_async(
             async with _sem:
                 await _repair_one(aid, mode)
 
-        tasks = (
-            [_throttled(aid, 'cleanup') for aid in cleanup_ids] +
-            [_throttled(aid, 'reanalyze') for aid in reanalyze_ids] +
-            [_throttled(aid, 'cards_only') for aid in cards_only_ids]
-        )
+        tasks = [_throttled(aid, mode) for aid, mode in repair_items]
         await _asyncio.gather(*tasks)
 
         # Final status

@@ -34,32 +34,47 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!token) return;
-    Promise.all([
-      review.stats(token, getUserTimezone()),
-      catApi.listAll(token),
-      review.getActiveSession(token).catch(() => null),
-      reading.dailyRecommendation(token).catch(() => null),
-      review.getActiveQuizSession(token).catch(() => null),
-    ])
-      .then(([s, catData, session, rec, quizSession]) => {
-        setStats(s);
-        setCats(catData.categories);
-        setAiCats(catData.ai_categories || []);
-        setCustomDecks(catData.custom_decks || []);
-        if (rec && rec.id) setRecommendation(rec);
-        if (session && !session.is_completed) {
-          try {
-            const remaining = JSON.parse(session.remaining_card_ids || "[]");
-            if (remaining.length > 0) {
-              setActiveSession({ ...session, remaining: remaining.length });
+    const fetchAll = () =>
+      Promise.all([
+        review.stats(token, getUserTimezone()),
+        catApi.listAll(token),
+        review.getActiveSession(token).catch(() => null),
+        reading.dailyRecommendation(token).catch(() => null),
+        review.getActiveQuizSession(token).catch(() => null),
+      ])
+        .then(([s, catData, session, rec, quizSession]) => {
+          setStats(s);
+          setCats(catData.categories);
+          setAiCats(catData.ai_categories || []);
+          setCustomDecks(catData.custom_decks || []);
+          if (rec && rec.id) setRecommendation(rec);
+          if (session && !session.is_completed) {
+            try {
+              const remaining = JSON.parse(session.remaining_card_ids || "[]");
+              if (remaining.length > 0) {
+                setActiveSession({ ...session, remaining: remaining.length });
+              }
+            } catch {
+              // ignore parse errors
             }
-          } catch {
-            // ignore parse errors
           }
-        }
-        // Check for active quiz session on server
-        if (quizSession && !quizSession.is_completed) {
-          setQuizRecovery(quizSession);
+          // Check for active quiz session on server
+          if (quizSession && !quizSession.is_completed) {
+            setQuizRecovery(quizSession);
+          }
+          return session;
+        });
+
+    fetchAll()
+      .then((session) => {
+        // If there's an active study session, the user likely navigated here
+        // mid-session.  The study page fires a keepalive batch-answer on
+        // unmount, but it may not be processed yet.  Re-fetch stats after a
+        // short delay so "今日复习" reflects the just-submitted reviews.
+        if (session && !session.is_completed) {
+          setTimeout(() => {
+            review.stats(token, getUserTimezone()).then(setStats).catch(() => {});
+          }, 1500);
         }
       })
       .finally(() => setLoading(false));

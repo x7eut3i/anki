@@ -951,7 +951,7 @@ export default function ReadingPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchReanalyzing, setBatchReanalyzing] = useState(false);
   const [repairing, setRepairing] = useState(false);
-  const [repairResult, setRepairResult] = useState<{ message: string; total: number; need_reanalyze: number; need_cards_only: number; job_id: number | null } | null>(null);
+  const [repairResult, setRepairResult] = useState<{ message: string; total: number; count_cleanup: number; count_analysis: number; count_cards: number; job_id: number | null } | null>(null);
 
   // Sorting
   const [sortBy, setSortBy] = useState<string>(() => loadSortPreference("reading", { sortKey: "created_at", sortDir: "desc" }).sortKey);
@@ -1825,7 +1825,7 @@ export default function ReadingPage() {
                 if (res.total === 0) {
                   showToast("没有需要修复的文章 🎉", "info");
                 } else {
-                  showToast(`修复任务已启动：${res.need_reanalyze} 篇重新分析，${res.need_cards_only} 篇补生成卡片`, "success");
+                  showToast(`修复任务已启动：${[res.count_cleanup && `${res.count_cleanup} 篇清洗失败`, res.count_analysis && `${res.count_analysis} 篇分析失败`, res.count_cards && `${res.count_cards} 篇卡片生成失败`].filter(Boolean).join("，")}`, "success");
                 }
               } catch (e: any) {
                 showToast("修复失败：" + (e.message || "未知错误"), "error");
@@ -1894,7 +1894,7 @@ export default function ReadingPage() {
       {repairResult && repairResult.total > 0 && (
         <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 flex items-center justify-between">
           <div className="text-sm text-orange-800">
-            🔧 修复任务已启动：<strong>{repairResult.need_reanalyze}</strong> 篇重新分析，<strong>{repairResult.need_cards_only}</strong> 篇补生成卡片。
+            🔧 修复任务已启动：共 <strong>{repairResult.total}</strong> 篇（{[repairResult.count_cleanup && `${repairResult.count_cleanup} 篇清洗失败`, repairResult.count_analysis && `${repairResult.count_analysis} 篇分析失败`, repairResult.count_cards && `${repairResult.count_cards} 篇卡片生成失败`].filter(Boolean).join("，")}）。
             请在 <span className="font-medium">AI任务</span> 页面查看进度。
           </div>
           <button className="text-orange-500 hover:text-orange-700 text-xs" onClick={() => setRepairResult(null)}>✕</button>

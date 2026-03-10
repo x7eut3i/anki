@@ -466,7 +466,7 @@ export const reading = {
     request<{ success: number; failed: number; total: number }>("/api/reading/batch-reanalyze", { method: "POST", body: JSON.stringify({ ids }), token }),
 
   repair: (token: string) =>
-    request<{ message: string; total: number; need_reanalyze: number; need_cards_only: number; job_id: number | null }>("/api/reading/repair", { method: "POST", token }),
+    request<{ message: string; total: number; count_cleanup: number; count_analysis: number; count_cards: number; job_id: number | null }>("/api/reading/repair", { method: "POST", token }),
 
   // Article-linked cards
   getArticleCards: (analysisId: number, token: string) =>

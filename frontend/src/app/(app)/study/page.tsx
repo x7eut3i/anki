@@ -343,41 +343,19 @@ export default function StudyPage() {
     }).catch(() => {});
   };
 
-  // Ref to latest flushAnswers for periodic save (avoids stale closure)
-  const flushRef = useRef(flushAnswers);
-  flushRef.current = flushAnswers;
-
   useEffect(() => {
     const handleBeforeUnload = () => autoSaveStudyRef.current?.();
-
-    // visibilitychange fires when user switches tabs, minimizes app, or
-    // navigates away on mobile (SPA nav via bottom navigator triggers this
-    // because the new route's paint makes the old component invisible).
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        autoSaveStudyRef.current?.();
-      }
-    };
 
     // pagehide is the modern replacement for beforeunload on mobile Safari
     const handlePageHide = () => autoSaveStudyRef.current?.();
 
     window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", handlePageHide);
 
-    // Periodic auto-flush every 15s so server stays in sync
-    // (uses flushAnswers which clears buffer and resets autoSaveFiredRef)
-    const interval = setInterval(() => {
-      flushRef.current();
-    }, 15_000);
-
     return () => {
-      clearInterval(interval);
       // Save on unmount (SPA route change)
       autoSaveStudyRef.current?.();
       window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pagehide", handlePageHide);
     };
   }, []);
@@ -583,7 +561,7 @@ export default function StudyPage() {
         <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
           <Button
             onClick={() => flushAnswers()}
-            disabled={isSaving || bufferedAnswers.length === 0}
+            disabled={isSaving}
             variant="outline"
             size="sm"
             className="text-sm h-8 px-2 sm:px-4 font-medium bg-green-50 hover:bg-green-100 text-green-700 border-green-300 dark:bg-green-950/30 dark:hover:bg-green-950/50 dark:text-green-400 dark:border-green-800"
