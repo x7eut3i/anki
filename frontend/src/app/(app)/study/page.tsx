@@ -339,12 +339,23 @@ export default function StudyPage() {
     }).catch(() => {});
   };
 
+  // Ref to latest flushAnswers for periodic save (avoids stale closure)
+  const flushRef = useRef(flushAnswers);
+  flushRef.current = flushAnswers;
+
   useEffect(() => {
     const handleBeforeUnload = () => autoSaveStudyRef.current?.();
 
     window.addEventListener("beforeunload", handleBeforeUnload);
 
+    // Periodic auto-flush every 15s so server stays in sync
+    // (uses flushAnswers which clears buffer and resets autoSaveFiredRef)
+    const interval = setInterval(() => {
+      flushRef.current();
+    }, 15_000);
+
     return () => {
+      clearInterval(interval);
       // Save on unmount (SPA route change)
       autoSaveStudyRef.current?.();
       window.removeEventListener("beforeunload", handleBeforeUnload);
@@ -367,14 +378,14 @@ export default function StudyPage() {
 
     if (!wasAlreadyReviewed) {
       setReviewedCount((c) => c + 1);
-
-      if (currentIndex + 1 < currentCards.length) {
-        nextCard();
-      } else {
-        setCompleted(true);
-      }
     }
-    // Re-rating: stay on current card
+
+    // Always advance to next card (including re-grades)
+    if (currentIndex + 1 < currentCards.length) {
+      nextCard();
+    } else {
+      setCompleted(true);
+    }
   };
 
   // Swipe hook MUST be called unconditionally (Rules of Hooks — before any early return)

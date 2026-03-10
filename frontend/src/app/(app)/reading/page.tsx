@@ -964,17 +964,8 @@ export default function ReadingPage() {
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [urlInput, setUrlInput] = useState("");
 
-  // Active tab in detail view (persisted to localStorage)
-  const [activeTab, setActiveTabState] = useState<"annotated" | "analysis" | "exam">(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("reading_detail_tab") as "annotated" | "analysis" | "exam") || "annotated";
-    }
-    return "annotated";
-  });
-  const setActiveTab = useCallback((tab: "annotated" | "analysis" | "exam") => {
-    setActiveTabState(tab);
-    localStorage.setItem("reading_detail_tab", tab);
-  }, []);
+  // Active tab in detail view — always default to "annotated" (标注阅读)
+  const [activeTab, setActiveTab] = useState<"annotated" | "analysis" | "exam">("annotated");
 
   // AI Chat
   const [showChat, setShowChat] = useState(false);

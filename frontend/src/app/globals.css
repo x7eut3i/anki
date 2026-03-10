@@ -97,6 +97,10 @@
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
+.rating-again:active, .rating-again:focus-visible { @apply bg-red-500 outline-none ring-0; }
+.rating-hard:active,  .rating-hard:focus-visible  { @apply bg-orange-500 outline-none ring-0; }
+.rating-good:active,  .rating-good:focus-visible  { @apply bg-green-500 outline-none ring-0; }
+.rating-easy:active,  .rating-easy:focus-visible  { @apply bg-blue-500 outline-none ring-0; }
 
 /* Prevent horizontal scrollbar on mobile */
 html, body {

@@ -302,17 +302,16 @@ export default function Flashcard({
             {RATING_LABELS.map((r) => (
               <Button
                 key={r.value}
+                variant="ghost"
                 className={cn("flex-col gap-1 h-auto py-3", r.className)}
                 onClick={() => {
                   onRate(r.value);
                 }}
               >
                 <span className="text-base font-bold">{r.label}</span>
-                {preview && showAnswer && (
-                  <span className="text-[10px] opacity-80">
-                    {preview[String(r.value)] || ""}
-                  </span>
-                )}
+                <span className={cn("text-[10px] min-h-[14px]", preview && showAnswer ? "opacity-80" : "opacity-0")}>
+                  {(preview && preview[String(r.value)]) || "\u00A0"}
+                </span>
                 <kbd className="text-[10px] opacity-60 bg-black/10 px-1 rounded">
                   {r.shortcut}
                 </kbd>
