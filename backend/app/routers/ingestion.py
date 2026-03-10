@@ -492,16 +492,18 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                     total_errors += 1
                                 return
 
+                            # Start with all error bits set — clear as each step succeeds
+                            from app.models.article_analysis import ArticleErrorState as _AES
+                            _error_state = _AES.CLEANUP_FAILED | _AES.ANALYSIS_FAILED | _AES.CARD_GEN_FAILED
+
                             # ── AI Step 1: Content cleanup ──
                             body_text, cleanup_ok = await ai_cleanup_content(
                                 task_config, title, body_text,
                                 user_id=admin_uid,
                                 source="crawl",
                             )
-                            _error_state = 0
-                            if not cleanup_ok:
-                                from app.models.article_analysis import ArticleErrorState
-                                _error_state |= ArticleErrorState.CLEANUP_FAILED
+                            if cleanup_ok:
+                                _error_state &= ~_AES.CLEANUP_FAILED
 
                             if _cancel_requested:
                                 return
@@ -517,11 +519,10 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             )
 
                         if analysis_data is None:
-                            from app.models.article_analysis import ArticleErrorState
                             async with state_lock:
                                 add_entry("error", source_label, f"AI分析失败: {title[:40]}")
                                 total_errors += 1
-                                # Set both ANALYSIS_FAILED and CARD_GEN_FAILED — cards can't be generated without analysis
+                                # _error_state still has ANALYSIS_FAILED+CARD_GEN_FAILED set
                                 analysis_item = ArticleAnalysis(
                                     user_id=admin_uid,
                                     title=title,
@@ -533,7 +534,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                     quality_score=0,
                                     word_count=len(body_text),
                                     status="new",
-                                    error_state=(_error_state | ArticleErrorState.ANALYSIS_FAILED | ArticleErrorState.CARD_GEN_FAILED),
+                                    error_state=_error_state,
                                 )
                                 session.add(analysis_item)
                                 session.commit()
@@ -564,9 +565,12 @@ async def _run_pipeline_internal(run_type: str = "manual"):
 
                         analysis_html = _build_analysis_html(title, analysis_data)
 
+                        # Analysis succeeded — clear ANALYSIS_FAILED bit
+                        _error_state &= ~_AES.ANALYSIS_FAILED
+
                         # ── Save article under lock (main session) ──
+                        # _error_state still has CARD_GEN_FAILED set (cards not yet generated)
                         async with state_lock:
-                            from app.models.article_analysis import ArticleErrorState as _AES
                             _prev = session.exec(
                                 select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                             ).first()
@@ -574,7 +578,6 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 session.delete(_prev)
                                 url_score_cache.pop(url, None)
 
-                            # Include CARD_GEN_FAILED — cards are not generated yet at this point
                             analysis_item = ArticleAnalysis(
                                 user_id=admin_uid,
                                 title=title,
@@ -588,7 +591,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 quality_reason=analysis_data.get("quality_reason", ""),
                                 word_count=len(body_text),
                                 status="new",
-                                error_state=_error_state | _AES.CARD_GEN_FAILED,
+                                error_state=_error_state,
                             )
                             session.add(analysis_item)
                             session.commit()
@@ -610,25 +613,16 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                 async with state_lock:
                                     total_cards += cards_created_this
                                     add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        if cards_created_this > 0:
-                                            # Clear CARD_GEN_FAILED on success
+                                    if cards_created_this > 0:
+                                        _saved = session.get(ArticleAnalysis, _article_id)
+                                        if _saved:
                                             _saved.error_state = (_saved.error_state or 0) & ~_AES.CARD_GEN_FAILED
-                                        else:
-                                            # Keep CARD_GEN_FAILED — 0 cards generated
-                                            _saved.error_state = (_saved.error_state or 0) | _AES.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
+                                            session.add(_saved)
+                                            session.commit()
                             except Exception as card_err:
                                 async with state_lock:
                                     add_entry("error", source_label, f"卡片生成失败: {str(card_err)[:100]}")
                                     total_errors += 1
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        _saved.error_state = (_saved.error_state or 0) | _AES.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
 
                     except json.JSONDecodeError as e:
                         async with state_lock:
@@ -918,15 +912,17 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                     total_errors += 1
                                 return
 
+                            # Start with all error bits set — clear as each step succeeds
+                            from app.models.article_analysis import ArticleErrorState as _AES_rmrb
+                            _error_state = _AES_rmrb.CLEANUP_FAILED | _AES_rmrb.ANALYSIS_FAILED | _AES_rmrb.CARD_GEN_FAILED
+
                             body_text, _cleanup_ok = await ai_cleanup_content(
                                 task_config, title, body_text,
                                 user_id=admin_uid,
                                 source="crawl",
                             )
-                            _error_state = 0
-                            if not _cleanup_ok:
-                                from app.models.article_analysis import ArticleErrorState as _AES_rmrb
-                                _error_state |= _AES_rmrb.CLEANUP_FAILED
+                            if _cleanup_ok:
+                                _error_state &= ~_AES_rmrb.CLEANUP_FAILED
 
                             if _cancel_requested:
                                 return
@@ -941,11 +937,9 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             )
 
                         if analysis_data is None:
-                            from app.models.article_analysis import ArticleErrorState as _AES_rmrb
                             async with state_lock:
                                 add_entry("error", source_label, f"AI分析失败: {title[:40]}")
                                 total_errors += 1
-                                # Save with ANALYSIS_FAILED+CARD_GEN_FAILED
                                 analysis_item = ArticleAnalysis(
                                     user_id=admin_uid,
                                     title=title,
@@ -957,7 +951,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                     quality_score=0,
                                     word_count=len(body_text),
                                     status="new",
-                                    error_state=(_error_state | _AES_rmrb.ANALYSIS_FAILED | _AES_rmrb.CARD_GEN_FAILED),
+                                    error_state=_error_state,
                                 )
                                 session.add(analysis_item)
                                 session.commit()
@@ -988,8 +982,10 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
 
                         analysis_html = _build_analysis_html(title, analysis_data)
 
+                        # Analysis succeeded — clear ANALYSIS_FAILED bit
+                        _error_state &= ~_AES_rmrb.ANALYSIS_FAILED
+
                         async with state_lock:
-                            from app.models.article_analysis import ArticleErrorState as _AES_rmrb
                             _prev = session.exec(
                                 select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                             ).first()
@@ -997,7 +993,6 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 session.delete(_prev)
                                 url_score_cache.pop(url, None)
 
-                            # Include CARD_GEN_FAILED — cards not yet generated
                             analysis_item = ArticleAnalysis(
                                 user_id=admin_uid,
                                 title=title,
@@ -1011,7 +1006,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                 quality_reason=analysis_data.get("quality_reason", ""),
                                 word_count=len(body_text),
                                 status="new",
-                                error_state=_error_state | _AES_rmrb.CARD_GEN_FAILED,
+                                error_state=_error_state,
                             )
                             session.add(analysis_item)
                             session.commit()
@@ -1033,23 +1028,16 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                                     total_cards += cards_created_this
                                     if cards_created_this:
                                         add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        if cards_created_this > 0:
+                                    if cards_created_this > 0:
+                                        _saved = session.get(ArticleAnalysis, _article_id)
+                                        if _saved:
                                             _saved.error_state = (_saved.error_state or 0) & ~_AES_rmrb.CARD_GEN_FAILED
-                                        else:
-                                            _saved.error_state = (_saved.error_state or 0) | _AES_rmrb.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
+                                            session.add(_saved)
+                                            session.commit()
                             except Exception as card_err:
                                 async with state_lock:
                                     add_entry("error", source_label, f"卡片生成失败: {str(card_err)[:100]}")
                                     total_errors += 1
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        _saved.error_state = (_saved.error_state or 0) | _AES_rmrb.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
 
                     except json.JSONDecodeError as e:
                         async with state_lock:
@@ -1335,15 +1323,17 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                     total_errors += 1
                                 return
 
+                            # Start with all error bits set — clear as each step succeeds
+                            from app.models.article_analysis import ArticleErrorState as _AES_qs
+                            _error_state = _AES_qs.CLEANUP_FAILED | _AES_qs.ANALYSIS_FAILED | _AES_qs.CARD_GEN_FAILED
+
                             body_text, _cleanup_ok = await ai_cleanup_content(
                                 task_config, title, body_text,
                                 user_id=admin_uid,
                                 source="crawl",
                             )
-                            _error_state = 0
-                            if not _cleanup_ok:
-                                from app.models.article_analysis import ArticleErrorState as _AES_qs
-                                _error_state |= _AES_qs.CLEANUP_FAILED
+                            if _cleanup_ok:
+                                _error_state &= ~_AES_qs.CLEANUP_FAILED
 
                             if _cancel_requested:
                                 return
@@ -1358,11 +1348,9 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             )
 
                         if analysis_data is None:
-                            from app.models.article_analysis import ArticleErrorState as _AES_qs
                             async with state_lock:
                                 add_entry("error", source_label, f"AI分析失败: {title[:40]}")
                                 total_errors += 1
-                                # Save with ANALYSIS_FAILED+CARD_GEN_FAILED
                                 analysis_item = ArticleAnalysis(
                                     user_id=admin_uid,
                                     title=title,
@@ -1374,7 +1362,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                     quality_score=0,
                                     word_count=len(body_text),
                                     status="new",
-                                    error_state=(_error_state | _AES_qs.ANALYSIS_FAILED | _AES_qs.CARD_GEN_FAILED),
+                                    error_state=_error_state,
                                 )
                                 session.add(analysis_item)
                                 session.commit()
@@ -1405,8 +1393,10 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
 
                         analysis_html = _build_analysis_html(title, analysis_data)
 
+                        # Analysis succeeded — clear ANALYSIS_FAILED bit
+                        _error_state &= ~_AES_qs.ANALYSIS_FAILED
+
                         async with state_lock:
-                            from app.models.article_analysis import ArticleErrorState as _AES_qs
                             _prev = session.exec(
                                 select(IngestionUrlCache).where(IngestionUrlCache.url == url)
                             ).first()
@@ -1414,7 +1404,6 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 session.delete(_prev)
                                 url_score_cache.pop(url, None)
 
-                            # Include CARD_GEN_FAILED — cards not yet generated
                             analysis_item = ArticleAnalysis(
                                 user_id=admin_uid,
                                 title=title,
@@ -1428,7 +1417,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                 quality_reason=analysis_data.get("quality_reason", ""),
                                 word_count=len(body_text),
                                 status="new",
-                                error_state=_error_state | _AES_qs.CARD_GEN_FAILED,
+                                error_state=_error_state,
                             )
                             session.add(analysis_item)
                             session.commit()
@@ -1450,23 +1439,16 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                                     total_cards += cards_created_this
                                     if cards_created_this:
                                         add_entry("info", source_label, f"🃏 生成 {cards_created_this} 张卡片")
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        if cards_created_this > 0:
+                                    if cards_created_this > 0:
+                                        _saved = session.get(ArticleAnalysis, _article_id)
+                                        if _saved:
                                             _saved.error_state = (_saved.error_state or 0) & ~_AES_qs.CARD_GEN_FAILED
-                                        else:
-                                            _saved.error_state = (_saved.error_state or 0) | _AES_qs.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
+                                            session.add(_saved)
+                                            session.commit()
                             except Exception as card_err:
                                 async with state_lock:
                                     add_entry("error", source_label, f"卡片生成失败: {str(card_err)[:100]}")
                                     total_errors += 1
-                                    _saved = session.get(ArticleAnalysis, _article_id)
-                                    if _saved:
-                                        _saved.error_state = (_saved.error_state or 0) | _AES_qs.CARD_GEN_FAILED
-                                        session.add(_saved)
-                                        session.commit()
 
                     except json.JSONDecodeError as e:
                         async with state_lock:

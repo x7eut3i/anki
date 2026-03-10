@@ -493,9 +493,9 @@ async def repair_failed_articles(
     """Find all articles with error_state flags and re-process them in background.
 
     Uses error_state bit flags to determine what repair is needed:
-    - CLEANUP_FAILED (bit 0): re-run content cleanup → re-analyze → generate cards
-    - ANALYSIS_FAILED (bit 1): re-analyze → generate cards
-    - CARD_GEN_FAILED (bit 2): only generate cards
+    - CLEANUP_FAILED (bit 0): re-run cleanup → re-analyze → generate cards
+    - ANALYSIS_FAILED (bit 1, no CLEANUP_FAILED): re-analyze only → generate cards
+    - CARD_GEN_FAILED (bit 2, no other flags): only generate cards
     """
     from app.models.article_analysis import ArticleErrorState
     from app.routers.ai_jobs import create_job
@@ -516,35 +516,46 @@ async def repair_failed_articles(
         )
     ).all()
 
-    # Categorize by what repair is needed
-    need_cleanup = []   # CLEANUP_FAILED — redo cleanup + analysis + cards
-    need_reanalyze = [] # ANALYSIS_FAILED — redo analysis + cards
-    need_cards_only = [] # CARD_GEN_FAILED only — just redo cards
+    # Categorize by what repair is needed (priority order)
+    need_cleanup = []    # CLEANUP_FAILED → redo cleanup + analysis + cards
+    need_reanalyze = []  # ANALYSIS_FAILED (no CLEANUP_FAILED) → redo analysis + cards
+    need_cards_only = [] # CARD_GEN_FAILED only → just redo cards
 
     for a in all_error_articles:
         es = a.error_state or 0
-        if es & ArticleErrorState.CLEANUP_FAILED or es & ArticleErrorState.ANALYSIS_FAILED:
+        if es & ArticleErrorState.CLEANUP_FAILED:
+            need_cleanup.append(a)
+        elif es & ArticleErrorState.ANALYSIS_FAILED:
             need_reanalyze.append(a)
         elif es & ArticleErrorState.CARD_GEN_FAILED:
             need_cards_only.append(a)
 
-    total = len(need_reanalyze) + len(need_cards_only)
+    total = len(need_cleanup) + len(need_reanalyze) + len(need_cards_only)
     if total == 0:
         return {
             "message": "没有需要修复的文章",
             "total": 0,
+            "need_cleanup": 0,
             "need_reanalyze": 0,
             "need_cards_only": 0,
             "job_id": None,
         }
 
     # Create a tracking job
+    parts = []
+    if need_cleanup:
+        parts.append(f"{len(need_cleanup)} 篇重新清洗+分析")
+    if need_reanalyze:
+        parts.append(f"{len(need_reanalyze)} 篇重新分析")
+    if need_cards_only:
+        parts.append(f"{len(need_cards_only)} 篇补生成卡片")
     job = create_job(
         session, current_user.id, "batch_repair",
-        f"一键修复: {len(need_reanalyze)} 篇重新分析, {len(need_cards_only)} 篇补生成卡片",
+        f"一键修复: {', '.join(parts)}",
     )
 
     # Collect IDs so we don't hold ORM objects across threads
+    cleanup_ids = [a.id for a in need_cleanup]
     reanalyze_ids = [a.id for a in need_reanalyze]
     cards_only_ids = [a.id for a in need_cards_only]
 
@@ -553,6 +564,7 @@ async def repair_failed_articles(
         job_id=job.id,
         user_id=current_user.id,
         config_id=config.id,
+        cleanup_ids=cleanup_ids,
         reanalyze_ids=reanalyze_ids,
         cards_only_ids=cards_only_ids,
     )
@@ -560,6 +572,7 @@ async def repair_failed_articles(
     return {
         "message": f"修复任务已启动",
         "total": total,
+        "need_cleanup": len(cleanup_ids),
         "need_reanalyze": len(reanalyze_ids),
         "need_cards_only": len(cards_only_ids),
         "job_id": job.id,
@@ -570,13 +583,14 @@ def _bg_repair_articles(
     job_id: int,
     user_id: int,
     config_id: int,
+    cleanup_ids: list[int],
     reanalyze_ids: list[int],
     cards_only_ids: list[int],
 ):
     """Background thread: repair all failed articles."""
     import asyncio
     asyncio.run(_bg_repair_articles_async(
-        job_id, user_id, config_id, reanalyze_ids, cards_only_ids,
+        job_id, user_id, config_id, cleanup_ids, reanalyze_ids, cards_only_ids,
     ))
 
 
@@ -584,10 +598,16 @@ async def _bg_repair_articles_async(
     job_id: int,
     user_id: int,
     config_id: int,
+    cleanup_ids: list[int],
     reanalyze_ids: list[int],
     cards_only_ids: list[int],
 ):
     """Async implementation for batch repair.
+
+    Three repair modes:
+    - cleanup_ids: re-run cleanup → re-analyze → generate cards
+    - reanalyze_ids: re-analyze → generate cards (content already clean)
+    - cards_only_ids: only generate cards (analysis already done)
 
     Processes articles concurrently — each task gets its own DB session
     so SQLite is never accessed concurrently from the same connection.
@@ -595,11 +615,11 @@ async def _bg_repair_articles_async(
     import asyncio as _asyncio
     from app.database import engine
     from app.routers.ai_jobs import update_job_status
-    from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
+    from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
     from app.models.article_analysis import ArticleErrorState
     from datetime import datetime as dt_, timezone as tz_
 
-    total = len(reanalyze_ids) + len(cards_only_ids)
+    total = len(cleanup_ids) + len(reanalyze_ids) + len(cards_only_ids)
     success_analyze = 0
     success_cards = 0
     failed_count = 0
@@ -616,7 +636,11 @@ async def _bg_repair_articles_async(
     _concurrency = max(_rpm * 2, 8)
 
     try:
-        async def _repair_one(aid: int, needs_analysis: bool):
+        async def _repair_one(aid: int, mode: str):
+            """Repair a single article.
+
+            mode: 'cleanup' | 'reanalyze' | 'cards_only'
+            """
             nonlocal success_analyze, success_cards, failed_count, processed
             try:
                 with Session(engine) as task_session:
@@ -632,13 +656,34 @@ async def _bg_repair_articles_async(
                     art_content = article.content
                     art_source_url = article.source_url or ""
 
-                    old_error_state = article.error_state or 0
+                    if mode == 'cleanup':
+                        # Step 1: Re-run content cleanup
+                        cleaned_content, cleanup_ok = await ai_cleanup_content(
+                            config, art_title, art_content,
+                            user_id=user_id, source="repair",
+                        )
+                        if cleanup_ok:
+                            article.content = cleaned_content
+                            art_content = cleaned_content
+                            article.error_state = (article.error_state or 0) & ~ArticleErrorState.CLEANUP_FAILED
+                            article.updated_at = dt_.now(tz_.utc)
+                            task_session.add(article)
+                            task_session.commit()
+                        else:
+                            # Cleanup still failed
+                            async with state_lock:
+                                failed_count += 1
+                            return
 
-                    if needs_analysis:
+                        # Fall through to re-analyze with cleaned content
+                        mode = 'reanalyze'
+
+                    if mode == 'reanalyze':
+                        # Step 2: Re-run analysis
                         analysis_data = await ai_analyze_article(
                             task_session, config,
                             title=art_title, content=art_content,
-                            user_id=user_id, source="reading",
+                            user_id=user_id, source="repair",
                         )
 
                         if analysis_data:
@@ -646,68 +691,44 @@ async def _bg_repair_articles_async(
                             article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
                             article.quality_score = analysis_data.get("quality_score", 0)
                             article.quality_reason = analysis_data.get("quality_reason", "")
-                            # Clear cleanup & analysis failure flags
-                            article.error_state = old_error_state & ~(
-                                ArticleErrorState.CLEANUP_FAILED | ArticleErrorState.ANALYSIS_FAILED
-                            )
+                            article.error_state = (article.error_state or 0) & ~ArticleErrorState.ANALYSIS_FAILED
                             article.updated_at = dt_.now(tz_.utc)
                             task_session.add(article)
                             task_session.commit()
                             async with state_lock:
                                 success_analyze += 1
-
-                            try:
-                                cards_created, _ = await ai_generate_cards(
-                                    task_session, config,
-                                    title=art_title, content=art_content,
-                                    source_url=art_source_url,
-                                    user_id=user_id, source="reading",
-                                )
-                                # Clear card gen failure flag
-                                article.error_state = article.error_state & ~ArticleErrorState.CARD_GEN_FAILED
-                                task_session.add(article)
-                                task_session.commit()
-                                async with state_lock:
-                                    success_cards += cards_created
-                            except Exception as e:
-                                logger.warning("Card generation failed during repair for article %d: %s", aid, e)
-                                article.error_state = article.error_state | ArticleErrorState.CARD_GEN_FAILED
-                                task_session.add(article)
-                                task_session.commit()
                         else:
-                            # Analysis still failed — keep/set the flag
-                            article.error_state = old_error_state | ArticleErrorState.ANALYSIS_FAILED
-                            task_session.add(article)
-                            task_session.commit()
+                            # Analysis still failed
                             async with state_lock:
                                 failed_count += 1
-                    else:
-                        # Cards-only
+                            return
+
+                        # Fall through to generate cards
+                        mode = 'cards_only'
+
+                    if mode == 'cards_only':
+                        # Step 3: Generate cards
                         try:
                             cards_created, _ = await ai_generate_cards(
                                 task_session, config,
                                 title=art_title, content=art_content,
                                 source_url=art_source_url,
-                                user_id=user_id, source="reading",
+                                user_id=user_id, source="repair",
                             )
                             if cards_created > 0:
-                                # Clear card gen failure flag
-                                article.error_state = old_error_state & ~ArticleErrorState.CARD_GEN_FAILED
+                                article.error_state = (article.error_state or 0) & ~ArticleErrorState.CARD_GEN_FAILED
                                 task_session.add(article)
                                 task_session.commit()
-                            async with state_lock:
-                                if cards_created > 0:
+                                async with state_lock:
                                     success_cards += cards_created
-                                    success_analyze += 1
-                                else:
+                            else:
+                                async with state_lock:
                                     failed_count += 1
                         except Exception as e:
                             logger.error("Card generation failed for article %d: %s", aid, e)
-                            article.error_state = old_error_state | ArticleErrorState.CARD_GEN_FAILED
-                            task_session.add(article)
-                            task_session.commit()
                             async with state_lock:
                                 failed_count += 1
+
             except Exception as e:
                 logger.error("Repair failed for article %d: %s", aid, e, exc_info=True)
                 async with state_lock:
@@ -720,12 +741,15 @@ async def _bg_repair_articles_async(
 
         _sem = _asyncio.Semaphore(_concurrency)
 
-        async def _throttled(aid: int, do_analyze: bool):
+        async def _throttled(aid: int, mode: str):
             async with _sem:
-                await _repair_one(aid, do_analyze)
+                await _repair_one(aid, mode)
 
-        tasks = [_throttled(aid, True) for aid in reanalyze_ids] + \
-                [_throttled(aid, False) for aid in cards_only_ids]
+        tasks = (
+            [_throttled(aid, 'cleanup') for aid in cleanup_ids] +
+            [_throttled(aid, 'reanalyze') for aid in reanalyze_ids] +
+            [_throttled(aid, 'cards_only') for aid in cards_only_ids]
+        )
         await _asyncio.gather(*tasks)
 
         # Final status
