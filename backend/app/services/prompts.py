@@ -39,13 +39,12 @@ def make_poem_expand_user_prompt(poem_names: list[str]) -> str:
         f"   原则：宁多勿漏，每一联/每一句名言都值得单独出题\n"
         f"3. 每张卡片的 front 为诗句填空（将1-2个关键词替换为______），back 为被挖空的词/句\n"
         f"4. 严格遵循 system prompt 中【古诗词名句】的字段格式要求\n"
-        f"5. 所有卡片的 category 统一设为「古诗词名句」\n"
-        f'6. facts.full_poem 填写全诗/全文原文（每张卡片都要完整填写，不得写"同上""见前文"等）\n'
+        f'5. facts.full_poem 填写全诗/全文原文（每张卡片都要完整填写，不得写"同上""见前文"等）\n'
         f"   facts.author 填作者，facts.dynasty 填朝代，facts.work 填作品名\n"
-        f"7. facts.appreciation 填赏析要点（此句为何成为名句、运用了什么修辞手法等）\n"
-        f"8. 挖空策略：优先挖关键动词、形容词、意象词，使填空有辨析价值而非机械记忆\n"
+        f"6. facts.appreciation 填赏析要点（此句为何成为名句、运用了什么修辞手法等）\n"
+        f"7. 挖空策略：优先挖关键动词、形容词、意象词，使填空有辨析价值而非机械记忆\n"
         f"   例：「______疑是地上霜」✗（太简单） → 「床前明月光，疑是______」✓（考察意象理解）\n"
-        f"9. 对于古文中的生僻字，在 front 中行内注音，如「闾(lǘ)阎扑地」「青雀黄龙之舳(zhú)」\n\n"
+        f"8. 对于古文中的生僻字，在 front,back,explanation,meta_info,distractors 中行内注音，如「闾(lǘ)阎扑地」「青雀黄龙之舳(zhú)」\n\n"
         f"═══ 返回格式 ═══\n"
         f"直接返回纯JSON数组，不要markdown代码块标记。每张卡片包含：\n"
         f"front, back, explanation, distractors(3个), tags, category, meta_info(含facts, knowledge, exam_focus, alternate_questions)\n"
