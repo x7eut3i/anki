@@ -126,6 +126,20 @@ def list_sources(
                 added = True
         if added:
             session.commit()
+
+        # Clean up stale system sources from old versions (e.g., "求是" was
+        # replaced by "求是杂志" — remove the old entry if it still exists)
+        valid_system_names = {s["name"] for s in SYSTEM_SOURCES}
+        stale_system = [
+            s for s in sources
+            if s.is_system and s.name not in valid_system_names
+        ]
+        if stale_system:
+            for s in stale_system:
+                session.delete(s)
+                logger.info("Removed stale system source: %s", s.name)
+            session.commit()
+
         sources = session.exec(
             select(ArticleSource).order_by(
                 ArticleSource.is_system.desc(),

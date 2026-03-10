@@ -38,6 +38,7 @@ import {
   ArrowDown,
   Search,
   Archive,
+  ChevronsUp,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1003,6 +1004,10 @@ export default function ReadingPage() {
   const [allTags, setAllTags] = useState<any[]>([]);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
 
+  // Scroll-to-top for detail view
+  const detailScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
   /* ── Fetch list ── */
   const fetchList = useCallback(async () => {
     if (!token) return;
@@ -1333,7 +1338,10 @@ export default function ReadingPage() {
     return (
       <div className="flex flex-col md:flex-row h-[calc(100vh-64px)]">
         {/* Main content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" ref={detailScrollRef} onScroll={(e) => {
+          const scrollTop = (e.target as HTMLDivElement).scrollTop;
+          setShowScrollTop(scrollTop > 400);
+        }}>
           <div className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
             {/* Back */}
             <div className="flex items-center gap-3">
@@ -1697,6 +1705,17 @@ export default function ReadingPage() {
                   )}
                 </div>
               </div>
+            )}
+
+            {/* Floating back-to-top button */}
+            {showScrollTop && (
+              <button
+                className="fixed bottom-20 right-4 md:right-8 z-40 bg-primary text-primary-foreground rounded-full p-3 shadow-lg hover:bg-primary/90 transition-all animate-in fade-in slide-in-from-bottom-4 duration-200"
+                onClick={() => detailScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+                title="回到顶部"
+              >
+                <ChevronsUp className="h-5 w-5" />
+              </button>
             )}
 
           </div>

@@ -77,11 +77,26 @@
   transform: rotateY(180deg);
 }
 
-/* Rating button colors */
-.rating-again { @apply bg-red-500 hover:bg-red-600 text-white; }
-.rating-hard  { @apply bg-orange-500 hover:bg-orange-600 text-white; }
-.rating-good  { @apply bg-green-500 hover:bg-green-600 text-white; }
-.rating-easy  { @apply bg-blue-500 hover:bg-blue-600 text-white; }
+/* Rating button colors — hover only on pointer devices to prevent
+   color changes when scrolling over buttons on touch screens */
+.rating-again { @apply bg-red-500 text-white; }
+.rating-hard  { @apply bg-orange-500 text-white; }
+.rating-good  { @apply bg-green-500 text-white; }
+.rating-easy  { @apply bg-blue-500 text-white; }
+@media (hover: hover) and (pointer: fine) {
+  .rating-again:hover { @apply bg-red-600; }
+  .rating-hard:hover  { @apply bg-orange-600; }
+  .rating-good:hover  { @apply bg-green-600; }
+  .rating-easy:hover  { @apply bg-blue-600; }
+}
+/* Prevent ghost clicks / tap highlight on touch devices */
+.rating-again,
+.rating-hard,
+.rating-good,
+.rating-easy {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
 
 /* Prevent horizontal scrollbar on mobile */
 html, body {

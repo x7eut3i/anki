@@ -98,6 +98,10 @@ def _migrate_add_columns():
         ("ai_interaction_logs", "source", "TEXT DEFAULT ''"),
         ("ai_interaction_logs", "raw_response", "TEXT DEFAULT ''"),
         ("study_sessions", "all_card_ids", "TEXT DEFAULT '[]'"),
+        ("study_sessions", "quiz_questions", "TEXT DEFAULT '[]'"),
+        ("study_sessions", "quiz_user_answers", "TEXT DEFAULT '{}'"),
+        ("study_sessions", "current_question", "INTEGER DEFAULT 0"),
+        ("study_sessions", "quiz_answer_map", "TEXT DEFAULT '{}'"),
         ("article_analyses", "last_read_at", "TIMESTAMP"),
     ]
     with engine.connect() as conn:

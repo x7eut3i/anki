@@ -65,8 +65,31 @@ def list_categories(
                 "card_count": deck_count,
                 "deck_id": deck.id,
             })
+
+    # User-created custom decks (non-AI, non-empty)
+    custom_decks = session.exec(
+        select(Deck).where(~col(Deck.name).like("AI-%"))
+    ).all()
+    custom_result = []
+    for deck in custom_decks:
+        deck_count = session.exec(
+            select(func.count(Card.id)).where(
+                Card.deck_id == deck.id,
+            )
+        ).one()
+        if deck_count > 0:
+            custom_result.append({
+                "id": -(1000 + deck.id),
+                "name": deck.name,
+                "description": deck.description or "",
+                "icon": "📚",
+                "sort_order": 200,
+                "is_active": True,
+                "card_count": deck_count,
+                "deck_id": deck.id,
+            })
     
-    return {"categories": result, "ai_categories": ai_result}
+    return {"categories": result, "ai_categories": ai_result, "custom_decks": custom_result}
 
 
 @router.get("/{category_id}")

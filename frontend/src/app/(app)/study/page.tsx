@@ -539,30 +539,30 @@ export default function StudyPage() {
   return (
     <div className="max-w-2xl mx-auto space-y-4" ref={swipeRef}>
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <Link href="/dashboard">
-          <Button variant="ghost" size="sm">
+          <Button variant="ghost" size="sm" className="px-2 sm:px-3">
             <ArrowLeft className="mr-1 h-4 w-4" />
-            返回
+            <span className="hidden sm:inline">返回</span>
           </Button>
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
           <Button
             onClick={() => flushAnswers()}
             disabled={isSaving || bufferedAnswers.length === 0}
             variant="outline"
-            size="lg"
-            className="text-base h-10 px-5 font-medium bg-green-50 hover:bg-green-100 text-green-700 border-green-300 dark:bg-green-950/30 dark:hover:bg-green-950/50 dark:text-green-400 dark:border-green-800"
+            size="sm"
+            className="text-sm h-8 px-2 sm:px-4 font-medium bg-green-50 hover:bg-green-100 text-green-700 border-green-300 dark:bg-green-950/30 dark:hover:bg-green-950/50 dark:text-green-400 dark:border-green-800"
           >
-            {isSaving ? "保存中..." : `💾 暂存 (${reviewedCount}/${currentCards.length})`}
+            {isSaving ? "..." : `💾 ${reviewedCount}/${currentCards.length}`}
           </Button>
           {isCurrentReviewed && (
-            <span className="text-xs text-green-600 bg-green-50 dark:bg-green-950/30 px-2 py-0.5 rounded-full">
-              ✅ 已评分
+            <span className="text-[10px] sm:text-xs text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 sm:px-2 py-0.5 rounded-full">
+              ✅
             </span>
           )}
-          <span className="text-sm text-muted-foreground">
-            {mode === "mix" ? "混合模式" : "复习模式"} · {currentIndex + 1} / {currentCards.length}
+          <span className="text-xs sm:text-sm text-muted-foreground">
+            {currentIndex + 1}/{currentCards.length}
           </span>
         </div>
       </div>

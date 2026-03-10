@@ -93,7 +93,7 @@ export const categories = {
     return data.categories;
   },
   listAll: async (token: string) => {
-    const data = await request<{ categories: any[]; ai_categories: any[] }>("/api/categories", { token });
+    const data = await request<{ categories: any[]; ai_categories: any[]; custom_decks?: any[] }>("/api/categories", { token });
     return data;
   },
 };

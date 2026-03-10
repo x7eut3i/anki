@@ -26,6 +26,7 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
   const [cats, setCats] = useState<any[]>([]);
   const [aiCats, setAiCats] = useState<any[]>([]);
+  const [customDecks, setCustomDecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState<any>(null);
   const [recommendation, setRecommendation] = useState<any>(null);
@@ -44,6 +45,7 @@ export default function DashboardPage() {
         setStats(s);
         setCats(catData.categories);
         setAiCats(catData.ai_categories || []);
+        setCustomDecks(catData.custom_decks || []);
         if (rec && rec.id) setRecommendation(rec);
         if (session && !session.is_completed) {
           try {
@@ -89,20 +91,20 @@ export default function DashboardPage() {
       {/* Resume session banner */}
       {activeSession && (
         <Card className="border-primary/50 bg-primary/5">
-          <CardContent className="flex items-center justify-between py-4">
+          <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4">
             <div className="flex items-center gap-3">
-              <PlayCircle className="h-8 w-8 text-primary animate-pulse" />
+              <PlayCircle className="h-6 w-6 sm:h-8 sm:w-8 text-primary animate-pulse shrink-0" />
               <div>
-                <p className="font-semibold">
+                <p className="font-semibold text-sm sm:text-base">
                   有未完成的{activeSession.mode === "mix" ? "混合练习" : "学习"}
                 </p>
-                <p className="text-sm text-muted-foreground">
-                  还剩 {activeSession.remaining} 张卡片未完成。开始新学习将自动放弃此会话。
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  还剩 {activeSession.remaining} 张卡片未完成
                 </p>
               </div>
             </div>
             <Link href={activeSession.mode === "mix" ? "/study?mode=mix&resume=1" : "/study?resume=1"}>
-              <Button>
+              <Button size="sm" className="w-full sm:w-auto">
                 <PlayCircle className="mr-2 h-4 w-4" />
                 继续{activeSession.mode === "mix" ? "练习" : "学习"}
               </Button>
@@ -114,18 +116,18 @@ export default function DashboardPage() {
       {/* Quiz recovery banner */}
       {!activeSession && quizRecovery && (
         <Card className="border-green-500/50 bg-green-50/50 dark:bg-green-950/20">
-          <CardContent className="flex items-center justify-between py-4">
+          <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4">
             <div className="flex items-center gap-3">
-              <ClipboardCheck className="h-8 w-8 text-green-600 animate-pulse" />
+              <ClipboardCheck className="h-6 w-6 sm:h-8 sm:w-8 text-green-600 animate-pulse shrink-0" />
               <div>
-                <p className="font-semibold">有未完成的模拟测试</p>
-                <p className="text-sm text-muted-foreground">
-                  已答 {quizRecovery.cards_reviewed || 0} / {quizRecovery.total_cards || 0} 题，可以继续测试。
+                <p className="font-semibold text-sm sm:text-base">有未完成的模拟测试</p>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  已答 {quizRecovery.cards_reviewed || 0} / {quizRecovery.total_cards || 0} 题
                 </p>
               </div>
             </div>
             <Link href="/quiz?resume=1">
-              <Button className="bg-green-600 hover:bg-green-700">
+              <Button className="bg-green-600 hover:bg-green-700 w-full sm:w-auto" size="sm">
                 <ClipboardCheck className="mr-2 h-4 w-4" />
                 继续测试
               </Button>
@@ -179,7 +181,7 @@ export default function DashboardPage() {
       )}
 
       {/* Stats cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 md:gap-4 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-1">
@@ -269,42 +271,42 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick actions */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-3 gap-2 md:gap-4">
         <Link href="/study">
           <Card className="cursor-pointer hover:shadow-md transition-shadow h-full">
-            <CardContent className="flex flex-col items-center justify-center py-8 gap-3">
-              <BookOpen className="h-12 w-12 text-primary" />
-              <h3 className="font-semibold text-lg">开始复习</h3>
-              <p className="text-sm text-muted-foreground text-center">
+            <CardContent className="flex flex-col items-center justify-center py-4 md:py-8 gap-2 md:gap-3">
+              <BookOpen className="h-8 w-8 md:h-12 md:w-12 text-primary" />
+              <h3 className="font-semibold text-sm md:text-lg">开始复习</h3>
+              <p className="text-xs md:text-sm text-muted-foreground text-center hidden md:block">
                 {dueCount > 0 ? `${dueCount} 张卡片等待复习` : "今日已完成 🎉"}
               </p>
-              <Button className="mt-2">立即学习</Button>
+              <Button className="mt-1 md:mt-2" size="sm">立即学习</Button>
             </CardContent>
           </Card>
         </Link>
 
         <Link href="/mix">
           <Card className="cursor-pointer hover:shadow-md transition-shadow h-full">
-            <CardContent className="flex flex-col items-center justify-center py-8 gap-3">
-              <Brain className="h-12 w-12 text-purple-500" />
-              <h3 className="font-semibold text-lg">混合模式</h3>
-              <p className="text-sm text-muted-foreground text-center">
+            <CardContent className="flex flex-col items-center justify-center py-4 md:py-8 gap-2 md:gap-3">
+              <Brain className="h-8 w-8 md:h-12 md:w-12 text-purple-500" />
+              <h3 className="font-semibold text-sm md:text-lg">混合模式</h3>
+              <p className="text-xs md:text-sm text-muted-foreground text-center hidden md:block">
                 跨分类交叉练习
               </p>
-              <Button variant="secondary" className="mt-2">混合学习</Button>
+              <Button variant="secondary" className="mt-1 md:mt-2" size="sm">混合学习</Button>
             </CardContent>
           </Card>
         </Link>
 
         <Link href="/quiz">
           <Card className="cursor-pointer hover:shadow-md transition-shadow h-full">
-            <CardContent className="flex flex-col items-center justify-center py-8 gap-3">
-              <ClipboardCheck className="h-12 w-12 text-green-500" />
-              <h3 className="font-semibold text-lg">模拟测试</h3>
-              <p className="text-sm text-muted-foreground text-center">
+            <CardContent className="flex flex-col items-center justify-center py-4 md:py-8 gap-2 md:gap-3">
+              <ClipboardCheck className="h-8 w-8 md:h-12 md:w-12 text-green-500" />
+              <h3 className="font-semibold text-sm md:text-lg">模拟测试</h3>
+              <p className="text-xs md:text-sm text-muted-foreground text-center hidden md:block">
                 检验学习成果
               </p>
-              <Button variant="outline" className="mt-2">开始测试</Button>
+              <Button variant="outline" className="mt-1 md:mt-2" size="sm">开始测试</Button>
             </CardContent>
           </Card>
         </Link>
@@ -360,6 +362,37 @@ export default function DashboardPage() {
                         <p className="text-sm font-medium truncate">{cat.name}</p>
                         <p className="text-xs text-muted-foreground">
                           {cat.card_count || 0} 张卡片
+                        </p>
+                      </div>
+                    </Link>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* User-created custom decks */}
+          {customDecks.length > 0 && (
+            <>
+              <div className="flex items-center gap-2 pt-2">
+                <span className="text-sm font-medium text-muted-foreground">📚 自定义牌组</span>
+                <div className="flex-1 border-t" />
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {customDecks.map((deck: any) => (
+                  <div
+                    key={deck.id}
+                    className="flex flex-col gap-1 p-3 rounded-lg border border-dashed border-purple-300 hover:bg-muted/50 hover:border-primary/50 transition-colors"
+                  >
+                    <Link
+                      href={`/study?deck=${deck.deck_id}`}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <span className="text-xl">{deck.icon}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{deck.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {deck.card_count || 0} 张卡片
                         </p>
                       </div>
                     </Link>
