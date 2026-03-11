@@ -344,73 +344,56 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* Category overview */}
+      {/* Category section */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">科目分类</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">📁 科目分类</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-          {cats.map((cat: any) => {
-            const catDecks = allDecks.filter((d: any) => d.category_id === cat.id && d.card_count > 0);
-            return (
-              <div key={cat.id}>
-                <Link
-                  href={`/study?category=${cat.id}&exclude_ai=1`}
-                  className="flex items-center gap-2 mb-2 hover:text-primary transition-colors"
-                >
-                  <span className="text-xl">{cat.icon}</span>
-                  <span className="text-sm font-semibold">{cat.name}</span>
-                  <span className="text-xs text-muted-foreground">({cat.card_count || 0} 张)</span>
-                </Link>
-                {catDecks.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-7">
-                    {catDecks.map((deck: any) => (
-                      <Link
-                        key={deck.id}
-                        href={`/study?deck=${deck.id}`}
-                        className={`flex flex-col gap-0.5 p-2.5 rounded-lg border text-left transition-colors hover:bg-muted/50 hover:border-primary/50 ${
-                          deck.is_ai ? "border-dashed" : ""
-                        }`}
-                      >
-                        <p className="text-sm font-medium truncate">{deck.name}</p>
-                        <p className="text-xs text-muted-foreground">{cat.name} · {deck.card_count} 张</p>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {/* Standalone decks (no category) */}
-          {(() => {
-            const standaloneDecks = allDecks.filter((d: any) => !d.category_id && d.card_count > 0);
-            if (standaloneDecks.length === 0) return null;
-            return (
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xl">📚</span>
-                  <span className="text-sm font-semibold">独立牌组</span>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+            {cats.map((cat: any) => (
+              <Link
+                key={cat.id}
+                href={`/study?category=${cat.id}`}
+                className="flex items-center gap-2 p-2.5 rounded-lg border hover:bg-muted/50 hover:border-primary/50 transition-colors"
+              >
+                <span className="text-lg">{cat.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{cat.name}</p>
+                  <p className="text-xs text-muted-foreground">{cat.card_count || 0} 张</p>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-7">
-                  {standaloneDecks.map((deck: any) => (
-                    <Link
-                      key={deck.id}
-                      href={`/study?deck=${deck.id}`}
-                      className={`flex flex-col gap-0.5 p-2.5 rounded-lg border text-left transition-colors hover:bg-muted/50 hover:border-primary/50 ${
-                        deck.is_ai ? "border-dashed" : ""
-                      }`}
-                    >
-                      <p className="text-sm font-medium truncate">{deck.name}</p>
-                      <p className="text-xs text-muted-foreground">{deck.card_count} 张</p>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+              </Link>
+            ))}
+          </div>
         </CardContent>
       </Card>
+
+      {/* Deck section */}
+      {allDecks.filter((d: any) => d.card_count > 0).length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">📦 牌组</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+              {allDecks.filter((d: any) => d.card_count > 0).map((deck: any) => (
+                <Link
+                  key={deck.id}
+                  href={`/study?deck=${deck.id}`}
+                  className={`flex flex-col gap-0.5 p-2.5 rounded-lg border transition-colors hover:bg-muted/50 hover:border-primary/50 ${
+                    deck.is_ai ? "border-dashed" : ""
+                  }`}
+                >
+                  <p className="text-sm font-medium truncate">{deck.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {deck.category_name ? `${deck.category_name} · ` : ""}{deck.card_count} 张
+                  </p>
+                </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

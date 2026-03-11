@@ -169,15 +169,15 @@ function AnnotatedText({
 }) {
   const [activePopup, setActivePopup] = useState<number | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
+  const clickYRef = useRef<number>(0);
 
-  // Reposition popup to stay within viewport — always use fixed centering
+  // Reposition popup: horizontally centered, vertically above the clicked line
   useEffect(() => {
     if (activePopup === null || !popupRef.current) return;
     const el = popupRef.current;
     const vh = window.innerHeight;
     const vw = window.innerWidth;
 
-    // Always use fixed positioning, horizontally centered
     el.style.position = "fixed";
     el.style.left = "50%";
     el.style.transform = "translateX(-50%)";
@@ -187,12 +187,17 @@ function AnnotatedText({
     el.style.overflowY = "auto";
     el.style.zIndex = "9999";
 
-    // Vertically: place below click point if possible, otherwise above
+    // Position above the clicked line
     const rect = el.getBoundingClientRect();
-    if (rect.bottom > vh - 8) {
-      // Too close to bottom, move up
-      el.style.top = `${Math.max(16, vh - rect.height - 16)}px`;
+    let top = clickYRef.current - rect.height - 12;
+    if (top < 16) {
+      // Not enough room above — place below the click instead
+      top = clickYRef.current + 24;
     }
+    if (top + rect.height > vh - 8) {
+      top = Math.max(16, vh - rect.height - 16);
+    }
+    el.style.top = `${top}px`;
   }, [activePopup]);
 
   // Close popup on outside click
@@ -320,7 +325,10 @@ function AnnotatedText({
                     borderColor: color,
                     backgroundColor: isActive ? `${color}20` : "transparent",
                   }}
-                  onClick={() => setActivePopup(isActive ? null : (seg.hIndex ?? null))}
+                  onClick={(e) => {
+                    clickYRef.current = e.clientY;
+                    setActivePopup(isActive ? null : (seg.hIndex ?? null));
+                  }}
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLElement).style.backgroundColor = `${color}15`;
                   }}
@@ -341,7 +349,7 @@ function AnnotatedText({
                     <span
                       ref={popupRef}
                       className="fixed z-[9999] bg-card border rounded-xl shadow-xl p-4 text-sm animate-in fade-in slide-in-from-top-2 duration-200"
-                      style={{ borderTopColor: color, borderTopWidth: 3, top: "30%" }}
+                      style={{ borderTopColor: color, borderTopWidth: 3 }}
                       onClick={(e) => e.stopPropagation()}
                     >
                       <span className="flex items-center gap-2 mb-2">
@@ -556,7 +564,7 @@ function StructuredAnalysis({ data }: { data: AnalysisJSON }) {
       {data.summary && (
         <section className="bg-blue-50 dark:bg-blue-950/30 rounded-xl p-5">
           <h3 className="text-base font-bold mb-2">📋 文章概述</h3>
-          <p className="text-sm leading-relaxed text-muted-foreground">{data.summary}</p>
+          <div className="text-sm leading-relaxed text-muted-foreground"><MarkdownContent content={data.summary} /></div>
         </section>
       )}
 
@@ -565,21 +573,21 @@ function StructuredAnalysis({ data }: { data: AnalysisJSON }) {
         <section className="bg-card rounded-xl border p-5 space-y-3">
           <h3 className="text-base font-bold">🔍 整体分析</h3>
           {data.overall_analysis.theme && (
-            <div className="flex gap-2 text-sm">
-              <span className="font-medium shrink-0 text-primary">主题</span>
-              <span className="text-muted-foreground">{data.overall_analysis.theme}</span>
+            <div className="text-sm">
+              <span className="font-medium text-primary">主题</span>
+              <div className="mt-0.5 text-muted-foreground"><MarkdownContent content={data.overall_analysis.theme} /></div>
             </div>
           )}
           {data.overall_analysis.structure && (
-            <div className="flex gap-2 text-sm">
-              <span className="font-medium shrink-0 text-primary">结构</span>
-              <span className="text-muted-foreground">{data.overall_analysis.structure}</span>
+            <div className="text-sm">
+              <span className="font-medium text-primary">结构</span>
+              <div className="mt-0.5 text-muted-foreground"><MarkdownContent content={data.overall_analysis.structure} /></div>
             </div>
           )}
           {data.overall_analysis.writing_style && (
-            <div className="flex gap-2 text-sm">
-              <span className="font-medium shrink-0 text-primary">写作特点</span>
-              <span className="text-muted-foreground">{data.overall_analysis.writing_style}</span>
+            <div className="text-sm">
+              <span className="font-medium text-primary">写作特点</span>
+              <div className="mt-0.5 text-muted-foreground"><MarkdownContent content={data.overall_analysis.writing_style} /></div>
             </div>
           )}
           {data.overall_analysis.core_arguments && data.overall_analysis.core_arguments.length > 0 && (
@@ -587,17 +595,17 @@ function StructuredAnalysis({ data }: { data: AnalysisJSON }) {
               <span className="font-medium text-sm text-primary">核心论点</span>
               <ul className="mt-1 space-y-1">
                 {data.overall_analysis.core_arguments.map((a, i) => (
-                  <li key={i} className="text-sm text-muted-foreground flex gap-2">
-                    <span className="text-primary shrink-0">•</span> {a}
+                  <li key={i} className="text-sm text-muted-foreground">
+                    <MarkdownContent content={`• ${a}`} />
                   </li>
                 ))}
               </ul>
             </div>
           )}
           {data.overall_analysis.logical_chain && (
-            <div className="flex gap-2 text-sm">
-              <span className="font-medium shrink-0 text-primary">论证逻辑</span>
-              <span className="text-muted-foreground">{data.overall_analysis.logical_chain}</span>
+            <div className="text-sm">
+              <span className="font-medium text-primary">论证逻辑</span>
+              <div className="mt-0.5 text-muted-foreground"><MarkdownContent content={data.overall_analysis.logical_chain} /></div>
             </div>
           )}
           {data.overall_analysis.shenglun_guidance && (
@@ -1236,6 +1244,28 @@ export default function ReadingPage() {
       setCardResult(null);
     }
   }, []);
+
+  // Listen for selectionchange (needed for iOS where mouseup is unreliable)
+  useEffect(() => {
+    if (!detail) return;
+    let debounceTimer: ReturnType<typeof setTimeout>;
+    const handler = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel?.toString().trim() || "";
+        if (text.length >= 4) {
+          setSelectedText(text);
+          setCardResult(null);
+        }
+      }, 300);
+    };
+    document.addEventListener("selectionchange", handler);
+    return () => {
+      document.removeEventListener("selectionchange", handler);
+      clearTimeout(debounceTimer);
+    };
+  }, [detail]);
 
   /* ── Create card from selection ── */
   const handleCreateCard = async () => {
