@@ -21,11 +21,11 @@ def list_categories(
     from app.models.card import Card
     from app.models.deck import Deck
     from sqlmodel import func, col
-    
+
     cats = session.exec(
         select(Category).where(Category.is_active == True).order_by(Category.sort_order)
     ).all()
-    
+
     # Get card counts for each category (exclude AI-deck cards to avoid double-counting)
     result = []
     for cat in cats:
@@ -43,53 +43,62 @@ def list_categories(
         cat_dict["card_count"] = card_count
         result.append(cat_dict)
 
-    # AI-generated decks as separate entries
-    ai_decks = session.exec(
-        select(Deck).where(col(Deck.name).like("AI-%"))
-    ).all()
-    ai_result = []
-    for deck in ai_decks:
+    # Build a category ID -> name map for deck display
+    cat_name_map = {cat.id: cat.name for cat in cats}
+
+    # All decks with card counts and category_name
+    all_decks = session.exec(select(Deck)).all()
+    all_decks_result = []
+    for deck in all_decks:
         deck_count = session.exec(
-            select(func.count(Card.id)).where(
-                Card.deck_id == deck.id,
-            )
+            select(func.count(Card.id)).where(Card.deck_id == deck.id)
         ).one()
-        if deck_count > 0:
+        all_decks_result.append({
+            "id": deck.id,
+            "name": deck.name,
+            "description": deck.description or "",
+            "category_id": deck.category_id,
+            "category_name": cat_name_map.get(deck.category_id, "") if deck.category_id else "",
+            "card_count": deck_count,
+            "is_ai": deck.name.startswith("AI-"),
+        })
+
+    # AI-generated decks as separate entries (kept for backward compatibility)
+    ai_result = []
+    for d in all_decks_result:
+        if d["is_ai"] and d["card_count"] > 0:
             ai_result.append({
-                "id": -(deck.id),
-                "name": deck.name,
-                "description": deck.description or f"AI生成的{deck.name[3:]}卡片",
+                "id": -(d["id"]),
+                "name": d["name"],
+                "description": d["description"] or f"AI生成的{d['name'][3:]}卡片",
                 "icon": "🤖",
                 "sort_order": 100,
                 "is_active": True,
-                "card_count": deck_count,
-                "deck_id": deck.id,
+                "card_count": d["card_count"],
+                "deck_id": d["id"],
             })
 
     # User-created custom decks (non-AI, non-empty)
-    custom_decks = session.exec(
-        select(Deck).where(~col(Deck.name).like("AI-%"))
-    ).all()
     custom_result = []
-    for deck in custom_decks:
-        deck_count = session.exec(
-            select(func.count(Card.id)).where(
-                Card.deck_id == deck.id,
-            )
-        ).one()
-        if deck_count > 0:
+    for d in all_decks_result:
+        if not d["is_ai"] and d["card_count"] > 0:
             custom_result.append({
-                "id": -(1000 + deck.id),
-                "name": deck.name,
-                "description": deck.description or "",
+                "id": -(1000 + d["id"]),
+                "name": d["name"],
+                "description": d["description"] or "",
                 "icon": "📚",
                 "sort_order": 200,
                 "is_active": True,
-                "card_count": deck_count,
-                "deck_id": deck.id,
+                "card_count": d["card_count"],
+                "deck_id": d["id"],
             })
-    
-    return {"categories": result, "ai_categories": ai_result, "custom_decks": custom_result}
+
+    return {
+        "categories": result,
+        "ai_categories": ai_result,
+        "custom_decks": custom_result,
+        "all_decks": all_decks_result,
+    }
 
 
 @router.get("/{category_id}")

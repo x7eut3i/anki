@@ -1371,16 +1371,20 @@ export default function ReadingPage() {
                   )}
                   {detail.publish_date && <span>{detail.publish_date}</span>}
                   <QualityBadge score={detail.quality_score} />
-                  {(detail.error_state ?? 0) > 0 && errorStateBadges(detail.error_state!).map((b, i) => (
-                    <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-medium ${b.color}`}>
-                      ⚠ {b.label}
-                    </span>
-                  ))}
                   {detail.quality_reason && (
                     <span className="text-xs text-muted-foreground">— {detail.quality_reason}</span>
                   )}
                   <span className="text-xs">{detail.word_count} 字</span>
                 </div>
+                {(detail.error_state ?? 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    {errorStateBadges(detail.error_state!).map((b, i) => (
+                      <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs font-medium ${b.color}`}>
+                        ⚠ {b.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {/* Article tags */}
                 <div className="flex flex-wrap items-center gap-1.5 mt-2">
                     {articleTags.map((tag: any) => (
@@ -2183,13 +2187,17 @@ export default function ReadingPage() {
                       {(item.card_count ?? 0) > 0 && (
                         <span className="text-primary">🃏 {item.card_count} 张卡片</span>
                       )}
-                      {(item.error_state ?? 0) > 0 && errorStateBadges(item.error_state!).map((b, i) => (
-                        <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
-                          ⚠ {b.label}
-                        </span>
-                      ))}
                       <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
+                    {(item.error_state ?? 0) > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        {errorStateBadges(item.error_state!).map((b, i) => (
+                          <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
+                            ⚠ {b.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {/* Article tags */}
                     {item.tags_list && item.tags_list.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1 mt-1.5">

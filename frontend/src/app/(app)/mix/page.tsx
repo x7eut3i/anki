@@ -43,6 +43,7 @@ export default function MixPage() {
 
   const [cats, setCats] = useState<CategoryItem[]>([]);
   const [aiCats, setAiCats] = useState<CategoryItem[]>([]);
+  const [allDecks, setAllDecks] = useState<any[]>([]);
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -50,6 +51,9 @@ export default function MixPage() {
   const [selectedCatIds, setSelectedCatIds] = useState<Set<number>>(new Set());
   const [selectedDeckIds, setSelectedDeckIds] = useState<Set<number>>(new Set());
   const [cardCount, setCardCount] = useState(30);
+
+  // Exclusive selection mode: "none" | "category" | "deck"
+  const selectionMode = selectedCatIds.size > 0 ? "category" : selectedDeckIds.size > 0 ? "deck" : "none";
 
   // Preset editing state
   const [showSave, setShowSave] = useState(false);
@@ -67,6 +71,7 @@ export default function MixPage() {
       ]);
       setCats(catData.categories || []);
       setAiCats(catData.ai_categories || []);
+      setAllDecks((catData.all_decks || []).filter((d: any) => d.card_count > 0));
       setPresets(presetData || []);
     } catch (e) {
       console.error("Failed to load mix data", e);
@@ -79,8 +84,9 @@ export default function MixPage() {
     loadData();
   }, [loadData]);
 
-  // Toggle helpers
+  // Toggle helpers (exclusive: selecting a category clears decks, vice versa)
   const toggleCat = (id: number) => {
+    if (selectionMode === "deck") return;
     setSelectedCatIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -89,6 +95,7 @@ export default function MixPage() {
   };
 
   const toggleDeck = (id: number) => {
+    if (selectionMode === "category") return;
     setSelectedDeckIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -99,9 +106,9 @@ export default function MixPage() {
   const totalSelected = selectedCatIds.size + selectedDeckIds.size;
 
   // Select all / deselect all
-  const selectAll = () => {
+  const selectAllCats = () => {
     setSelectedCatIds(new Set(cats.map((c) => c.id)));
-    setSelectedDeckIds(new Set(aiCats.map((c) => c.id)));
+    setSelectedDeckIds(new Set());
   };
   const deselectAll = () => {
     setSelectedCatIds(new Set());
@@ -194,8 +201,8 @@ export default function MixPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={selectAll}>
-            全选
+          <Button variant="outline" size="sm" onClick={selectAllCats}>
+            全选分类
           </Button>
           <Button variant="outline" size="sm" onClick={deselectAll}>
             清空
@@ -259,16 +266,23 @@ export default function MixPage() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">📁 科目分类</CardTitle>
+          {selectionMode === "deck" && (
+            <p className="text-xs text-muted-foreground">已选择牌组，不可同时选择分类</p>
+          )}
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
             {cats.map((cat) => {
               const selected = selectedCatIds.has(cat.id);
+              const disabled = selectionMode === "deck";
               return (
                 <button
                   key={cat.id}
+                  disabled={disabled}
                   className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm min-w-0 ${
-                    selected
+                    disabled
+                      ? "opacity-40 cursor-not-allowed border-gray-200 dark:border-gray-700"
+                      : selected
                       ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 ring-1 ring-blue-500"
                       : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
                   }`}
@@ -288,26 +302,33 @@ export default function MixPage() {
         </CardContent>
       </Card>
 
-      {/* AI Deck Selection */}
-      {aiCats.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">🤖 AI 生成牌组</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {aiCats.map((deck) => {
-                const selected = selectedDeckIds.has(deck.id);
-                return (
-                  <button
-                    key={deck.id}
-                    className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-left transition-all text-sm min-w-0 ${
-                      selected
-                        ? "border-purple-500 bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 ring-1 ring-purple-500"
-                        : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 border-dashed"
-                    }`}
-                    onClick={() => toggleDeck(deck.id)}
-                  >
+      {/* Deck Selection */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">📦 牌组选择</CardTitle>
+          {selectionMode === "category" && (
+            <p className="text-xs text-muted-foreground">已选择分类，不可同时选择牌组</p>
+          )}
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {allDecks.map((deck) => {
+              const selected = selectedDeckIds.has(deck.id);
+              const disabled = selectionMode === "category";
+              return (
+                <button
+                  key={deck.id}
+                  disabled={disabled}
+                  className={`flex flex-col gap-0.5 px-3 py-2.5 rounded-lg border text-left transition-all text-sm min-w-0 ${
+                    disabled
+                      ? "opacity-40 cursor-not-allowed border-gray-200 dark:border-gray-700"
+                      : selected
+                      ? "border-purple-500 bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-300 ring-1 ring-purple-500"
+                      : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                  }`}
+                  onClick={() => toggleDeck(deck.id)}
+                >
+                  <div className="flex items-center gap-2 w-full">
                     {selected ? (
                       <Check className="h-4 w-4 text-purple-500 shrink-0" />
                     ) : (
@@ -315,13 +336,16 @@ export default function MixPage() {
                     )}
                     <span className="truncate flex-1">{deck.name}</span>
                     <span className="text-xs text-muted-foreground">{deck.card_count}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                  </div>
+                  {deck.category_name && (
+                    <span className="text-xs text-muted-foreground ml-6">{deck.category_name}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Card Count + Actions */}
       <Card>
@@ -444,7 +468,7 @@ export default function MixPage() {
                   .filter(Boolean)
                   .concat(
                     Array.from(selectedDeckIds)
-                      .map((id) => aiCats.find((c) => c.id === id)?.name)
+                      .map((id) => allDecks.find((d: any) => d.id === id)?.name)
                       .filter(Boolean)
                   )
                   .join("、") || "无"}

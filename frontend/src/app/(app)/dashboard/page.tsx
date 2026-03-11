@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const [cats, setCats] = useState<any[]>([]);
   const [aiCats, setAiCats] = useState<any[]>([]);
   const [customDecks, setCustomDecks] = useState<any[]>([]);
+  const [allDecks, setAllDecks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSession, setActiveSession] = useState<any>(null);
   const [recommendation, setRecommendation] = useState<any>(null);
@@ -47,20 +48,27 @@ export default function DashboardPage() {
           setCats(catData.categories);
           setAiCats(catData.ai_categories || []);
           setCustomDecks(catData.custom_decks || []);
+          setAllDecks(catData.all_decks || []);
           if (rec && rec.id) setRecommendation(rec);
           if (session && !session.is_completed) {
             try {
               const remaining = JSON.parse(session.remaining_card_ids || "[]");
               if (remaining.length > 0) {
                 setActiveSession({ ...session, remaining: remaining.length });
+              } else {
+                setActiveSession(null);
               }
             } catch {
-              // ignore parse errors
+              setActiveSession(null);
             }
+          } else {
+            setActiveSession(null);
           }
           // Check for active quiz session on server
           if (quizSession && !quizSession.is_completed) {
             setQuizRecovery(quizSession);
+          } else {
+            setQuizRecovery(null);
           }
           return session;
         });
@@ -78,6 +86,15 @@ export default function DashboardPage() {
         }
       })
       .finally(() => setLoading(false));
+
+    // Re-fetch session/stats when the page becomes visible again
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchAll().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [token]);
 
   if (loading) {
@@ -332,90 +349,66 @@ export default function DashboardPage() {
         <CardHeader>
           <CardTitle className="text-lg">科目分类</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {cats.map((cat: any) => (
-              <div
-                key={cat.id}
-                className="flex flex-col gap-1 p-3 rounded-lg border hover:bg-muted/50 hover:border-primary/50 transition-colors"
-              >
+        <CardContent className="space-y-6">
+          {cats.map((cat: any) => {
+            const catDecks = allDecks.filter((d: any) => d.category_id === cat.id && d.card_count > 0);
+            return (
+              <div key={cat.id}>
                 <Link
                   href={`/study?category=${cat.id}&exclude_ai=1`}
-                  className="flex items-center gap-2 cursor-pointer"
+                  className="flex items-center gap-2 mb-2 hover:text-primary transition-colors"
                 >
                   <span className="text-xl">{cat.icon}</span>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{cat.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {cat.card_count || 0} 张可学习
-                    </p>
-                  </div>
+                  <span className="text-sm font-semibold">{cat.name}</span>
+                  <span className="text-xs text-muted-foreground">({cat.card_count || 0} 张)</span>
                 </Link>
-              </div>
-            ))}
-          </div>
-
-          {/* AI-generated categories */}
-          {aiCats.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 pt-2">
-                <span className="text-sm font-medium text-muted-foreground">🤖 AI 生成</span>
-                <div className="flex-1 border-t" />
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                {aiCats.map((cat: any) => (
-                  <div
-                    key={cat.id}
-                    className="flex flex-col gap-1 p-3 rounded-lg border border-dashed hover:bg-muted/50 hover:border-primary/50 transition-colors"
-                  >
-                    <Link
-                      href={`/study?deck=${cat.deck_id}`}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <span className="text-xl">{cat.icon}</span>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{cat.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {cat.card_count || 0} 张卡片
-                        </p>
-                      </div>
-                    </Link>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-
-          {/* User-created custom decks */}
-          {customDecks.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 pt-2">
-                <span className="text-sm font-medium text-muted-foreground">📚 自定义牌组</span>
-                <div className="flex-1 border-t" />
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                {customDecks.map((deck: any) => (
-                  <div
-                    key={deck.id}
-                    className="flex flex-col gap-1 p-3 rounded-lg border border-dashed border-purple-300 hover:bg-muted/50 hover:border-primary/50 transition-colors"
-                  >
-                    <Link
-                      href={`/study?deck=${deck.deck_id}`}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <span className="text-xl">{deck.icon}</span>
-                      <div className="min-w-0">
+                {catDecks.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-7">
+                    {catDecks.map((deck: any) => (
+                      <Link
+                        key={deck.id}
+                        href={`/study?deck=${deck.id}`}
+                        className={`flex flex-col gap-0.5 p-2.5 rounded-lg border text-left transition-colors hover:bg-muted/50 hover:border-primary/50 ${
+                          deck.is_ai ? "border-dashed" : ""
+                        }`}
+                      >
                         <p className="text-sm font-medium truncate">{deck.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {deck.card_count || 0} 张卡片
-                        </p>
-                      </div>
-                    </Link>
+                        <p className="text-xs text-muted-foreground">{cat.name} · {deck.card_count} 张</p>
+                      </Link>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            </>
-          )}
+            );
+          })}
+
+          {/* Standalone decks (no category) */}
+          {(() => {
+            const standaloneDecks = allDecks.filter((d: any) => !d.category_id && d.card_count > 0);
+            if (standaloneDecks.length === 0) return null;
+            return (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xl">📚</span>
+                  <span className="text-sm font-semibold">独立牌组</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-7">
+                  {standaloneDecks.map((deck: any) => (
+                    <Link
+                      key={deck.id}
+                      href={`/study?deck=${deck.id}`}
+                      className={`flex flex-col gap-0.5 p-2.5 rounded-lg border text-left transition-colors hover:bg-muted/50 hover:border-primary/50 ${
+                        deck.is_ai ? "border-dashed" : ""
+                      }`}
+                    >
+                      <p className="text-sm font-medium truncate">{deck.name}</p>
+                      <p className="text-xs text-muted-foreground">{deck.card_count} 张</p>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
     </div>

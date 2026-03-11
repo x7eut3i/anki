@@ -82,6 +82,12 @@ export default function Flashcard({
       setRandomForceType(Math.random() < 0.6 ? "qa" : "choice");
     }
 
+    // 成语 cards: always use original front/back, never alternate questions
+    if (card.category_name === "成语") {
+      setAltQuestion(null);
+      return;
+    }
+
     const meta = parseJson<Record<string, any> | null>(card.meta_info, null);
     const alts = meta?.alternate_questions;
     if (alts?.length) {
@@ -313,7 +319,8 @@ export default function Flashcard({
                     readOnly && !isSelected && "opacity-30",
                     isSelected && "ring-2 ring-offset-2 ring-yellow-400 scale-105",
                   )}
-                  onClick={() => {
+                  onClick={(e) => {
+                    (e.currentTarget as HTMLButtonElement).blur();
                     onRate(r.value);
                   }}
                 >

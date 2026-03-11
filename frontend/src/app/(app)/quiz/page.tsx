@@ -34,7 +34,9 @@ type QuizQuestion = {
 export default function QuizPage() {
   const { token } = useAuthStore();
   const [cats, setCats] = useState<any[]>([]);
+  const [allDecks, setAllDecks] = useState<any[]>([]);
   const [selectedCats, setSelectedCats] = useState<number[]>([]);
+  const [selectedDeckIds, setSelectedDeckIds] = useState<number[]>([]);
   const [questionCount, setQuestionCount] = useState(20);
   const [quizStarted, setQuizStarted] = useState(false);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
@@ -46,6 +48,9 @@ export default function QuizPage() {
   const [pendingRecovery, setPendingRecovery] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Exclusive selection mode: "none" | "category" | "deck"
+  const selectionMode = selectedCats.length > 0 ? "category" : selectedDeckIds.length > 0 ? "deck" : "none";
+
   useEffect(() => {
     if (!token) return;
     const wantsResume = new URLSearchParams(window.location.search).get("resume") === "1";
@@ -54,7 +59,8 @@ export default function QuizPage() {
       catApi.listAll(token),
       review.getActiveQuizSession(token).catch(() => null),
     ]).then(([catData, quizSession]) => {
-      setCats([...(catData.categories || []), ...(catData.ai_categories || [])]);
+      setCats(catData.categories || []);
+      setAllDecks((catData.all_decks || []).filter((d: any) => d.card_count > 0));
 
       // Check for active quiz session on server
       if (quizSession && !quizSession.is_completed) {
@@ -89,13 +95,10 @@ export default function QuizPage() {
     if (!token) return;
     setLoading(true);
     try {
-      // Separate real category IDs (positive) from deck pseudo-IDs (negative)
-      const catIds = selectedCats.filter((id) => id > 0);
-      const deckIds = selectedCats.filter((id) => id < 0).map((id) => -id);
       const data = await quizApi.generate(
         {
-          category_ids: catIds.length > 0 ? catIds : undefined,
-          deck_ids: deckIds.length > 0 ? deckIds : undefined,
+          category_ids: selectedCats.length > 0 ? selectedCats : undefined,
+          deck_ids: selectedDeckIds.length > 0 ? selectedDeckIds : undefined,
           card_count: questionCount,
           include_types: ["choice"],  // Mock test = 100% multiple choice
         },
@@ -238,27 +241,74 @@ export default function QuizPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {cats.map((cat) => (
-                <Badge
-                  key={cat.id}
-                  variant={selectedCats.includes(cat.id) ? "default" : "outline"}
-                  className="cursor-pointer text-sm py-1.5 px-3"
-                  onClick={() =>
-                    setSelectedCats((prev) =>
-                      prev.includes(cat.id)
-                        ? prev.filter((id) => id !== cat.id)
-                        : [...prev, cat.id]
-                    )
-                  }
-                >
-                  {cat.icon} {cat.name}                  {cat.card_count != null && (
-                    <span className="ml-1 opacity-60">({cat.card_count})</span>
-                  )}                </Badge>
-              ))}
+              {cats.map((cat) => {
+                const disabled = selectionMode === "deck";
+                return (
+                  <Badge
+                    key={cat.id}
+                    variant={selectedCats.includes(cat.id) ? "default" : "outline"}
+                    className={cn(
+                      "cursor-pointer text-sm py-1.5 px-3",
+                      disabled && "opacity-40 cursor-not-allowed",
+                    )}
+                    onClick={() => {
+                      if (disabled) return;
+                      setSelectedCats((prev) =>
+                        prev.includes(cat.id)
+                          ? prev.filter((id) => id !== cat.id)
+                          : [...prev, cat.id]
+                      );
+                    }}
+                  >
+                    {cat.icon} {cat.name}
+                    {cat.card_count != null && (
+                      <span className="ml-1 opacity-60">({cat.card_count})</span>
+                    )}
+                  </Badge>
+                );
+              })}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              不选择则从所有分类出题
+              不选择则从所有分类出题。选择分类后不可选择牌组，反之亦然。
             </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">选择牌组</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {allDecks.map((deck) => {
+                const disabled = selectionMode === "category";
+                const selected = selectedDeckIds.includes(deck.id);
+                return (
+                  <Badge
+                    key={deck.id}
+                    variant={selected ? "default" : "outline"}
+                    className={cn(
+                      "cursor-pointer text-sm py-1.5 px-3",
+                      disabled && "opacity-40 cursor-not-allowed",
+                    )}
+                    onClick={() => {
+                      if (disabled) return;
+                      setSelectedDeckIds((prev) =>
+                        prev.includes(deck.id)
+                          ? prev.filter((id) => id !== deck.id)
+                          : [...prev, deck.id]
+                      );
+                    }}
+                  >
+                    {deck.name}
+                    {deck.category_name && (
+                      <span className="ml-1 opacity-60">[{deck.category_name}]</span>
+                    )}
+                    <span className="ml-1 opacity-60">({deck.card_count})</span>
+                  </Badge>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
 
