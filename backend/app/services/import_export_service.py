@@ -138,7 +138,7 @@ class ImportExportService:
         # Get AI config for _ai_call_with_retry (RPM, fallback model, etc.)
         from app.models.ai_config import AIConfig
         ai_cfg = self.session.exec(
-            select(AIConfig).where(AIConfig.is_enabled == True)
+            select(AIConfig).where(AIConfig.is_enabled == True, AIConfig.is_active == True)
         ).first()
         max_retries = getattr(ai_cfg, "max_retries", 3) or 3
 

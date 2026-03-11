@@ -339,6 +339,7 @@ async def create_analysis(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:
@@ -504,6 +505,7 @@ async def repair_failed_articles(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:
@@ -799,6 +801,7 @@ async def batch_reanalyze(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:
@@ -925,6 +928,7 @@ async def reanalyze_article(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:
@@ -1383,6 +1387,7 @@ async def create_card_from_selection(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:

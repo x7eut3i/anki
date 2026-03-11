@@ -362,6 +362,7 @@ async def regenerate_questions(
         select(AIConfig).where(
             AIConfig.user_id == current_user.id,
             AIConfig.is_enabled == True,
+            AIConfig.is_active == True,
         )
     ).first()
     if not config:

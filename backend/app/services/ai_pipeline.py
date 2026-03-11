@@ -53,6 +53,7 @@ def _read_current_rpm_limit(config) -> int:
                     select(AIConfig).where(
                         AIConfig.user_id == user_id,
                         AIConfig.is_enabled == True,
+                        AIConfig.is_active == True,
                     )
                 ).first()
                 if db_config:

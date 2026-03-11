@@ -308,7 +308,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
             try:
                 # Check AI availability
                 config = session.exec(
-                    select(AIConfig).where(AIConfig.is_enabled == True)
+                    select(AIConfig).where(AIConfig.is_enabled == True, AIConfig.is_active == True)
                 ).first()
                 if not config or not config.api_key:
                     add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")
@@ -762,7 +762,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
             try:
                 # Check AI availability
                 config = session.exec(
-                    select(AIConfig).where(AIConfig.is_enabled == True)
+                    select(AIConfig).where(AIConfig.is_enabled == True, AIConfig.is_active == True)
                 ).first()
                 if not config or not config.api_key:
                     add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")
@@ -1173,7 +1173,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
 
             try:
                 config = session.exec(
-                    select(AIConfig).where(AIConfig.is_enabled == True)
+                    select(AIConfig).where(AIConfig.is_enabled == True, AIConfig.is_active == True)
                 ).first()
                 if not config or not config.api_key:
                     add_entry("error", "系统", "未配置AI服务，无法进行抓取分析")

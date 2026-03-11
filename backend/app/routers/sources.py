@@ -312,6 +312,7 @@ async def test_source(
                         select(AIConfig).where(
                             AIConfig.user_id == current_user.id,
                             AIConfig.is_enabled == True,
+                            AIConfig.is_active == True,
                         )
                     ).first()
                     if ai_config and first_body:

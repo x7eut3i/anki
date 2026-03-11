@@ -20,9 +20,18 @@ class AIService:
     @property
     def config(self) -> AIConfig | None:
         if self._config is None:
+            # Get the active config for this user
             self._config = self.session.exec(
-                select(AIConfig).where(AIConfig.user_id == self.user_id)
+                select(AIConfig).where(
+                    AIConfig.user_id == self.user_id,
+                    AIConfig.is_active == True,
+                )
             ).first()
+            if self._config is None:
+                # Fall back to any config for this user
+                self._config = self.session.exec(
+                    select(AIConfig).where(AIConfig.user_id == self.user_id)
+                ).first()
             if self._config is None:
                 # Auto-seed from ai_config.json if available
                 try:
