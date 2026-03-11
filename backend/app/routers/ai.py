@@ -26,7 +26,7 @@ from app.schemas.ai import (
 )
 from app.services.ai_service import AIService
 from app.services.prompt_loader import get_prompt, get_prompt_model
-from app.routers.ai_jobs import create_job, update_job_status
+from app.routers.ai_jobs import create_job, update_job_status, is_job_cancelled
 
 logger = logging.getLogger("anki.ai")
 
@@ -819,6 +819,8 @@ def _bg_smart_import(job_id: int, user_id: int, deck_id: int, file_bytes: bytes,
 
     try:
         with SyncSession(engine) as session:
+            if is_job_cancelled(job_id):
+                return
             ai = AIService(session, user_id)
             if not ai.is_available():
                 update_job_status(job_id, "failed", error_message=ai.get_unavailable_reason())
@@ -847,6 +849,8 @@ def _bg_smart_import(job_id: int, user_id: int, deck_id: int, file_bytes: bytes,
             if len(content_text) > 8000:
                 content_text = content_text[:8000] + "\n...(truncated)"
 
+            if is_job_cancelled(job_id):
+                return
             update_job_status(job_id, "running", progress=30)
 
             from app.services.prompts import CARD_SYSTEM_PROMPT, make_import_user_prompt
@@ -923,6 +927,8 @@ def _bg_batch_enrich(job_id: int, user_id: int, card_ids: list[int], deck_id: in
 
     try:
         with SyncSession(engine) as session:
+            if is_job_cancelled(job_id):
+                return
             ai = AIService(session, user_id)
             if not ai.is_available():
                 update_job_status(job_id, "failed", error_message=ai.get_unavailable_reason())
@@ -943,6 +949,8 @@ def _bg_batch_enrich(job_id: int, user_id: int, card_ids: list[int], deck_id: in
             errors = 0
 
             for i in range(0, total, batch_size):
+                if is_job_cancelled(job_id):
+                    return
                 batch = cards_to_enrich[i:i + batch_size]
                 progress = int(10 + 80 * i / max(total, 1))
                 update_job_status(job_id, "running", progress=progress)
@@ -1030,6 +1038,8 @@ def _bg_complete_and_create_cards(
 
     try:
         with SyncSession(engine) as session:
+            if is_job_cancelled(job_id):
+                return
             ai = AIService(session, user_id)
             if not ai.is_available():
                 update_job_status(job_id, "failed", error_message=ai.get_unavailable_reason())

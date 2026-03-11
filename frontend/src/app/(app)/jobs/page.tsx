@@ -17,6 +17,8 @@ import {
   Clock,
   Play,
   AlertTriangle,
+  Ban,
+  StopCircle,
 } from "lucide-react";
 
 interface AIJob {
@@ -37,6 +39,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
   running: { label: "运行中", color: "bg-blue-100 text-blue-800", icon: Play },
   completed: { label: "已完成", color: "bg-green-100 text-green-800", icon: CheckCircle2 },
   failed: { label: "失败", color: "bg-red-100 text-red-800", icon: XCircle },
+  cancelled: { label: "已取消", color: "bg-gray-100 text-gray-800", icon: Ban },
 };
 
 export default function JobsPage() {
@@ -82,12 +85,22 @@ export default function JobsPage() {
   };
 
   const handleClearCompleted = async () => {
-    if (!token || !confirm("确定清除所有已完成/已失败的任务？")) return;
+    if (!token || !confirm("确定清除所有已完成/已失败/已取消的任务？")) return;
     try {
       await jobsApi.clearCompleted(token);
       loadJobs();
     } catch (err: any) {
       alert(err.message || "清除失败");
+    }
+  };
+
+  const handleCancel = async (jobId: number) => {
+    if (!token || !confirm("确定取消此任务？")) return;
+    try {
+      await jobsApi.cancel(jobId, token);
+      loadJobs();
+    } catch (err: any) {
+      alert(err.message || "取消失败");
     }
   };
 
@@ -132,7 +145,7 @@ export default function JobsPage() {
             <RefreshCw className="h-4 w-4 mr-1" />
             刷新
           </Button>
-          {jobsList.some((j) => j.status === "completed" || j.status === "failed") && (
+          {jobsList.some((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled") && (
             <Button
               variant="outline"
               size="sm"
@@ -148,7 +161,7 @@ export default function JobsPage() {
 
       {/* Filters */}
       <div className="flex items-center gap-2">
-        {["", "pending", "running", "completed", "failed"].map((s) => (
+        {["", "pending", "running", "completed", "failed", "cancelled"].map((s) => (
           <Button
             key={s}
             size="sm"
@@ -258,8 +271,21 @@ export default function JobsPage() {
                       </div>
                     </div>
 
-                    {/* Delete button (only for completed/failed) */}
-                    {(job.status === "completed" || job.status === "failed") && (
+                    {/* Cancel button (for pending/running) */}
+                    {(job.status === "pending" || job.status === "running") && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-orange-600 shrink-0"
+                        onClick={() => handleCancel(job.id)}
+                        title="取消任务"
+                      >
+                        <StopCircle className="h-4 w-4" />
+                      </Button>
+                    )}
+
+                    {/* Delete button (only for completed/failed/cancelled) */}
+                    {(job.status === "completed" || job.status === "failed" || job.status === "cancelled") && (
                       <Button
                         variant="ghost"
                         size="icon"

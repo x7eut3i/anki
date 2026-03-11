@@ -153,7 +153,7 @@ export default function StudyStatsPage() {
   const { token } = useAuthStore();
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(1);
   const [period, setPeriod] = useState("day");
 
   const fetchData = async () => {

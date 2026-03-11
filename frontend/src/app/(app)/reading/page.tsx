@@ -163,15 +163,17 @@ function QualityBadge({ score }: { score: number }) {
 function AnnotatedText({
   content,
   highlights,
+  containerRef,
 }: {
   content: string;
   highlights: Highlight[];
+  containerRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const [activePopup, setActivePopup] = useState<number | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const clickYRef = useRef<number>(0);
 
-  // Reposition popup: horizontally centered, vertically above the clicked line
+  // Reposition popup: horizontally centered on article content, vertically above the clicked line
   useEffect(() => {
     if (activePopup === null || !popupRef.current) return;
     const el = popupRef.current;
@@ -179,13 +181,23 @@ function AnnotatedText({
     const vw = window.innerWidth;
 
     el.style.position = "fixed";
-    el.style.left = "50%";
-    el.style.transform = "translateX(-50%)";
     el.style.right = "auto";
-    el.style.width = `${Math.min(360, vw - 32)}px`;
+    const popupWidth = Math.min(360, vw - 32);
+    el.style.width = `${popupWidth}px`;
     el.style.maxHeight = `${Math.min(vh * 0.6, 400)}px`;
     el.style.overflowY = "auto";
     el.style.zIndex = "9999";
+
+    // Horizontal centering: use article container width if available
+    if (containerRef?.current) {
+      const cRect = containerRef.current.getBoundingClientRect();
+      const centerX = cRect.left + cRect.width / 2;
+      el.style.left = `${centerX - popupWidth / 2}px`;
+      el.style.transform = "none";
+    } else {
+      el.style.left = "50%";
+      el.style.transform = "translateX(-50%)";
+    }
 
     // Position above the clicked line
     const rect = el.getBoundingClientRect();
@@ -1002,6 +1014,9 @@ export default function ReadingPage() {
   const [categoryList, setCategoryList] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
 
+  // Content container ref (for popup centering)
+  const contentContainerRef = useRef<HTMLDivElement>(null);
+
   // Related cards from this article
   const [relatedCards, setRelatedCards] = useState<any[]>([]);
   const [showRelatedCards, setShowRelatedCards] = useState(true);
@@ -1629,10 +1644,10 @@ export default function ReadingPage() {
             )}
 
             {/* Content */}
-            <div className="bg-card rounded-xl border p-6" onMouseUp={handleTextSelect}>
+            <div ref={contentContainerRef} className="bg-card rounded-xl border p-6" onMouseUp={handleTextSelect}>
               {activeTab === "annotated" ? (
                 highlights.length > 0 ? (
-                  <AnnotatedText content={cleanContent(detail.content)} highlights={highlights} />
+                  <AnnotatedText content={cleanContent(detail.content)} highlights={highlights} containerRef={contentContainerRef} />
                 ) : (
                   <div className="prose prose-sm max-w-none leading-[1.9] text-[15px] reading-content">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanContent(detail.content)}</ReactMarkdown>
@@ -2212,15 +2227,15 @@ export default function ReadingPage() {
                       </span>
                       <QualityBadge score={item.quality_score} />
                       {item.source_name && <span>{item.source_name}</span>}
-                      {item.publish_date && <span>{formatDateTime(item.publish_date, { dateOnly: true })}</span>}
+                      {item.publish_date && <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">发布 {formatDateTime(item.publish_date, { dateOnly: true })}</span>}
                       <span>{item.word_count} 字</span>
                       {(item.card_count ?? 0) > 0 && (
                         <span className="text-primary">🃏 {item.card_count} 张卡片</span>
                       )}
-                      <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
+                      <span className="bg-gray-50 dark:bg-gray-800/40 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded">收录 {formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
                     {(item.error_state ?? 0) > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-1.5 border-t border-dashed border-muted-foreground/20">
                         {errorStateBadges(item.error_state!).map((b, i) => (
                           <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
                             ⚠ {b.label}

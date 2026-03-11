@@ -723,6 +723,9 @@ export const jobs = {
   delete: (jobId: number, token: string) =>
     request<void>(`/api/jobs/${jobId}`, { method: "DELETE", token }),
 
+  cancel: (jobId: number, token: string) =>
+    request<any>(`/api/jobs/${jobId}/cancel`, { method: "POST", token }),
+
   clearCompleted: (token: string) =>
     request<any>("/api/jobs", { method: "DELETE", token }),
 };

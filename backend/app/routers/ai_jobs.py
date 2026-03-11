@@ -72,13 +72,33 @@ def delete_job(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Delete a completed/failed job."""
+    """Delete a completed/failed/cancelled job."""
     job = session.get(AIJob, job_id)
     if not job or job.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status in ("pending", "running"):
-        raise HTTPException(status_code=400, detail="无法删除正在进行的任务")
+        raise HTTPException(status_code=400, detail="无法删除正在进行的任务，请先取消")
     session.delete(job)
+    session.commit()
+    return {"ok": True}
+
+
+@router.post("/{job_id}/cancel")
+def cancel_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Cancel a pending or running job."""
+    job = session.get(AIJob, job_id)
+    if not job or job.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status not in ("pending", "running"):
+        raise HTTPException(status_code=400, detail="只能取消等待中或运行中的任务")
+    job.status = "cancelled"
+    job.completed_at = datetime.now(timezone.utc)
+    job.error_message = "用户取消"
+    session.add(job)
     session.commit()
     return {"ok": True}
 
@@ -88,11 +108,11 @@ def clear_completed_jobs(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Clear all completed/failed jobs."""
+    """Clear all completed/failed/cancelled jobs."""
     jobs = session.exec(
         select(AIJob).where(
             AIJob.user_id == current_user.id,
-            col(AIJob.status).in_(["completed", "failed"]),
+            col(AIJob.status).in_(["completed", "failed", "cancelled"]),
         )
     ).all()
     count = len(jobs)
@@ -138,11 +158,14 @@ def update_job_status(
             job = session.get(AIJob, job_id)
             if not job:
                 return
+            # If job was cancelled, don't overwrite the cancelled status
+            if job.status == "cancelled" and status not in ("cancelled",):
+                return
             job.status = status
             job.progress = progress
             if status == "running" and not job.started_at:
                 job.started_at = datetime.now(timezone.utc)
-            if status in ("completed", "failed"):
+            if status in ("completed", "failed", "cancelled"):
                 job.completed_at = datetime.now(timezone.utc)
                 job.progress = 100 if status == "completed" else job.progress
             if result_json:
@@ -153,3 +176,14 @@ def update_job_status(
             session.commit()
     except Exception as exc:
         logger.warning("update_job_status(%s, %s) failed: %s", job_id, status, exc)
+
+
+def is_job_cancelled(job_id: int) -> bool:
+    """Check if a job has been cancelled. Used by background tasks for cooperative cancellation."""
+    try:
+        from sqlmodel import Session as SyncSession
+        with SyncSession(engine) as session:
+            job = session.get(AIJob, job_id)
+            return job is not None and job.status == "cancelled"
+    except Exception:
+        return False

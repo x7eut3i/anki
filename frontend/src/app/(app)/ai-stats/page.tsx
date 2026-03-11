@@ -114,7 +114,7 @@ export default function AIStatsPage() {
   const [aiStats, setAiStats] = useState<any>(null);
   const [contentStats, setContentStats] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(1);
 
   const fetchAll = async () => {
     if (!token) return;

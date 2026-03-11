@@ -9,7 +9,7 @@ from app.auth import get_current_user
 from app.database import get_session, engine
 from app.models.user import User
 from app.services.import_export_service import ImportExportService
-from app.routers.ai_jobs import create_job, update_job_status
+from app.routers.ai_jobs import create_job, update_job_status, is_job_cancelled
 
 logger = logging.getLogger("anki.import_export")
 
@@ -38,9 +38,13 @@ def _bg_ai_import(
 
     try:
         with SyncSession(engine) as session:
+            if is_job_cancelled(job_id):
+                return
             service = ImportExportService(session, user_id)
 
             # Try AI import
+            if is_job_cancelled(job_id):
+                return
             update_job_status(job_id, "running", progress=20)
             ai_result = None
             try:

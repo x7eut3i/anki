@@ -614,7 +614,7 @@ async def _bg_repair_articles_async(
     """
     import asyncio as _asyncio
     from app.database import engine
-    from app.routers.ai_jobs import update_job_status
+    from app.routers.ai_jobs import update_job_status, is_job_cancelled
     from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
     from app.models.article_analysis import ArticleErrorState
     from datetime import datetime as dt_, timezone as tz_
@@ -642,6 +642,8 @@ async def _bg_repair_articles_async(
             mode: 'cleanup' | 'reanalyze' | 'cards_only'
             """
             nonlocal success_analyze, success_cards, failed_count, processed
+            if is_job_cancelled(job_id):
+                return
             try:
                 with Session(engine) as task_session:
                     config = task_session.get(AIConfig, config_id)
@@ -1187,10 +1189,12 @@ async def _bg_analyze_article_async(
 ):
     """Async inner implementation for background article analysis."""
     from app.database import engine
-    from app.routers.ai_jobs import update_job_status
+    from app.routers.ai_jobs import update_job_status, is_job_cancelled, is_job_cancelled
 
     with Session(engine) as session:
         try:
+            if is_job_cancelled(job_id):
+                return
             update_job_status(job_id, "running", progress=10)
 
             config = session.get(AIConfig, config_id)
@@ -1201,6 +1205,8 @@ async def _bg_analyze_article_async(
             # Delegate to shared AI analysis pipeline
             from app.services.ai_pipeline import ai_analyze_article
 
+            if is_job_cancelled(job_id):
+                return
             update_job_status(job_id, "running", progress=20)
 
             analysis_data = await ai_analyze_article(
@@ -1212,6 +1218,8 @@ async def _bg_analyze_article_async(
 
             ai_error_msg = "" if analysis_data else "AI分析失败"
 
+            if is_job_cancelled(job_id):
+                return
             update_job_status(job_id, "running", progress=60)
 
             # Update the article with analysis results
