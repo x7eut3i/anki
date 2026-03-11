@@ -105,6 +105,7 @@ def _migrate_add_columns():
         ("article_analyses", "last_read_at", "TIMESTAMP"),
         ("article_analyses", "error_state", "INTEGER DEFAULT 0"),
         ("ai_configs", "ai_timeout", "INTEGER DEFAULT 300"),
+        ("ai_configs", "import_concurrency", "INTEGER DEFAULT 3"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in migrations:

@@ -19,6 +19,7 @@ class AIConfig(SQLModel, table=True):
     rpm_limit: int = Field(default=0)  # Requests per minute limit (0 = unlimited)
     max_daily_calls: int = Field(default=50)
     import_batch_size: int = Field(default=30)
+    import_concurrency: int = Field(default=3)  # Concurrent import tasks allowed
     max_tokens: int = Field(default=8192)
     temperature: float = Field(default=0.3)
     max_retries: int = Field(default=3)  # AI call retry count
