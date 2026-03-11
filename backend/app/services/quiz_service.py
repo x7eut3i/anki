@@ -5,6 +5,7 @@ import random
 from datetime import datetime, timezone
 
 from sqlmodel import Session, select, func, col
+from sqlalchemy import or_
 
 from app.models.card import Card
 from app.models.category import Category
@@ -32,8 +33,28 @@ class QuizService:
         # Select cards, prioritizing those with low retrievability / high lapses
         query = select(Card)
         if category_ids:
-            query = query.where(col(Card.category_id).in_(category_ids))
-        if deck_ids:
+            from app.models.deck import Deck
+            cat_deck_ids = [d.id for d in self.session.exec(
+                select(Deck).where(col(Deck.category_id).in_(category_ids))
+            ).all()]
+            if cat_deck_ids:
+                if deck_ids:
+                    all_dk = list(set(cat_deck_ids + list(deck_ids)))
+                    query = query.where(
+                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(all_dk))
+                    )
+                else:
+                    query = query.where(
+                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(cat_deck_ids))
+                    )
+            else:
+                if deck_ids:
+                    query = query.where(
+                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(deck_ids))
+                    )
+                else:
+                    query = query.where(col(Card.category_id).in_(category_ids))
+        elif deck_ids:
             query = query.where(col(Card.deck_id).in_(deck_ids))
 
         # Get more cards than needed, then sample

@@ -21,25 +21,35 @@ def list_categories(
     from app.models.card import Card
     from app.models.deck import Deck
     from sqlmodel import func, col
+    from sqlalchemy import or_
 
     cats = session.exec(
         select(Category).where(Category.is_active == True).order_by(Category.sort_order)
     ).all()
 
-    # Get card counts for each category (exclude AI-deck cards to avoid double-counting)
+    # Get card counts for each category = cards with matching category_id
+    # OR cards in decks belonging to this category
     result = []
     for cat in cats:
         cat_dict = cat.model_dump()
-        # Only count cards that are NOT in an AI-* deck
-        count_query = (
-            select(func.count(Card.id))
-            .outerjoin(Deck, Card.deck_id == Deck.id)
-            .where(
-                Card.category_id == cat.id,
-                col(Deck.name).not_like("AI-%") | (Card.deck_id == None),  # noqa: E711
-            )
-        )
-        card_count = session.exec(count_query).one()
+        # Find all deck IDs belonging to this category
+        cat_deck_ids = [d.id for d in session.exec(
+            select(Deck).where(Deck.category_id == cat.id)
+        ).all()]
+        # Count cards: category_id matches OR deck_id is in category's decks
+        if cat_deck_ids:
+            card_count = session.exec(
+                select(func.count(Card.id)).where(
+                    or_(
+                        Card.category_id == cat.id,
+                        col(Card.deck_id).in_(cat_deck_ids),
+                    )
+                )
+            ).one()
+        else:
+            card_count = session.exec(
+                select(func.count(Card.id)).where(Card.category_id == cat.id)
+            ).one()
         cat_dict["card_count"] = card_count
         result.append(cat_dict)
 

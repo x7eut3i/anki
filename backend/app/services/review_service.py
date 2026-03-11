@@ -79,20 +79,41 @@ class ReviewService:
             )
         )
 
-        # Category/deck filtering — use OR when both are specified (mix mode)
-        if category_ids and deck_ids:
-            query = query.where(
-                or_(
-                    col(Card.category_id).in_(category_ids),
-                    col(Card.deck_id).in_(deck_ids),
-                )
-            )
-        elif category_ids:
-            query = query.where(col(Card.category_id).in_(category_ids))
-            if exclude_ai_decks:
-                query = query.outerjoin(Deck, Card.deck_id == Deck.id).where(
-                    col(Deck.name).not_like("AI-%") | (Card.deck_id == None)  # noqa: E711
-                )
+        # Category/deck filtering
+        # When category_ids is given, expand to include all decks in those categories
+        if category_ids:
+            from app.models.deck import Deck
+            cat_deck_ids = [d.id for d in self.session.exec(
+                select(Deck).where(col(Deck.category_id).in_(category_ids))
+            ).all()]
+            # Cards whose category_id matches OR whose deck_id belongs to a category deck
+            if cat_deck_ids:
+                if deck_ids:
+                    # Mix mode: merge deck_ids with category decks
+                    all_deck_ids = list(set(cat_deck_ids + list(deck_ids)))
+                    query = query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(all_deck_ids),
+                        )
+                    )
+                else:
+                    query = query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(cat_deck_ids),
+                        )
+                    )
+            else:
+                if deck_ids:
+                    query = query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(deck_ids),
+                        )
+                    )
+                else:
+                    query = query.where(col(Card.category_id).in_(category_ids))
         elif deck_ids:
             query = query.where(col(Card.deck_id).in_(deck_ids))
         elif deck_id is not None:
@@ -159,20 +180,37 @@ class ReviewService:
             )
         )
         # Category/deck count filtering — must match main query logic
-        if category_ids and deck_ids:
-            count_query = count_query.where(
-                or_(
-                    col(Card.category_id).in_(category_ids),
-                    col(Card.deck_id).in_(deck_ids),
-                )
-            )
-        elif category_ids:
-            count_query = count_query.where(col(Card.category_id).in_(category_ids))
-            if exclude_ai_decks:
-                from app.models.deck import Deck as DeckModel
-                count_query = count_query.outerjoin(DeckModel, Card.deck_id == DeckModel.id).where(
-                    col(DeckModel.name).not_like("AI-%") | (Card.deck_id == None)  # noqa: E711
-                )
+        if category_ids:
+            from app.models.deck import Deck as DeckModel
+            cat_deck_ids_c = [d.id for d in self.session.exec(
+                select(DeckModel).where(col(DeckModel.category_id).in_(category_ids))
+            ).all()]
+            if cat_deck_ids_c:
+                if deck_ids:
+                    all_deck_ids_c = list(set(cat_deck_ids_c + list(deck_ids)))
+                    count_query = count_query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(all_deck_ids_c),
+                        )
+                    )
+                else:
+                    count_query = count_query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(cat_deck_ids_c),
+                        )
+                    )
+            else:
+                if deck_ids:
+                    count_query = count_query.where(
+                        or_(
+                            col(Card.category_id).in_(category_ids),
+                            col(Card.deck_id).in_(deck_ids),
+                        )
+                    )
+                else:
+                    count_query = count_query.where(col(Card.category_id).in_(category_ids))
         elif deck_ids:
             count_query = count_query.where(col(Card.deck_id).in_(deck_ids))
         elif deck_id is not None:

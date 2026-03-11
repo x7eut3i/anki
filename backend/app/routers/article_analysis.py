@@ -1660,8 +1660,9 @@ def export_articles_json(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Export articles as JSON for backup/import elsewhere."""
+    """Export articles as JSON for backup/import elsewhere. Includes associated cards."""
     from fastapi.responses import Response
+    from app.models.card import Card
 
     query = select(ArticleAnalysis).where(
         ArticleAnalysis.user_id == current_user.id
@@ -1683,7 +1684,26 @@ def export_articles_json(
             except (json.JSONDecodeError, TypeError):
                 analysis_json_parsed = a.analysis_json
 
-        export_data.append({
+        # Find associated cards by source_url
+        cards_data = []
+        if a.source_url:
+            linked_cards = session.exec(
+                select(Card).where(Card.source == a.source_url)
+            ).all()
+            for c in linked_cards:
+                cards_data.append({
+                    "front": c.front,
+                    "back": c.back,
+                    "explanation": c.explanation,
+                    "distractors": c.distractors,
+                    "tags": c.tags,
+                    "meta_info": c.meta_info,
+                    "is_ai_generated": c.is_ai_generated,
+                    "category_id": c.category_id,
+                    "deck_id": c.deck_id,
+                })
+
+        article_entry = {
             "title": a.title,
             "source_url": a.source_url,
             "source_name": a.source_name,
@@ -1696,7 +1716,11 @@ def export_articles_json(
             "is_starred": a.is_starred,
             "analysis_json": analysis_json_parsed,
             "analysis_html": a.analysis_html,
-        })
+            "error_state": a.error_state,
+        }
+        if cards_data:
+            article_entry["cards"] = cards_data
+        export_data.append(article_entry)
     content_str = json.dumps(
         {"articles": export_data, "version": 1, "total": len(export_data)},
         ensure_ascii=False,
@@ -1716,8 +1740,11 @@ def import_articles_json(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Import articles from JSON file. Dedup by source_url, then title. No AI involved."""
+    """Import articles from JSON file. Dedup by source_url, then title. No AI involved.
+    Also imports associated cards if present."""
     import io
+    from app.models.card import Card
+    from app.models.deck import Deck
 
     try:
         raw = file.file.read()
@@ -1732,6 +1759,7 @@ def import_articles_json(
 
     imported = 0
     skipped = 0
+    cards_imported = 0
     errors = []
 
     for i, article_data in enumerate(articles_list):
@@ -1780,18 +1808,70 @@ def import_articles_json(
                 word_count=article_data.get("word_count", len(content)),
                 status=article_data.get("status", "new"),
                 is_starred=article_data.get("is_starred", False),
+                error_state=article_data.get("error_state", 0),
             )
             session.add(item)
+            session.flush()  # Get the item.id
             imported += 1
+
+            # Import associated cards
+            cards_list = article_data.get("cards", [])
+            for card_data in cards_list:
+                front = card_data.get("front", "").strip()
+                back = card_data.get("back", "").strip()
+                if not front or not back:
+                    continue
+
+                # Resolve deck: use provided deck_id if the deck exists
+                deck_id = card_data.get("deck_id")
+                if deck_id:
+                    deck = session.get(Deck, deck_id)
+                    if not deck:
+                        deck_id = None
+
+                # If no valid deck, find or create a default "精读卡片" deck
+                if not deck_id:
+                    default_deck = session.exec(
+                        select(Deck).where(Deck.name == "精读卡片")
+                    ).first()
+                    if not default_deck:
+                        default_deck = Deck(
+                            name="精读卡片",
+                            description="从精读文章生成的卡片",
+                            category_id=card_data.get("category_id"),
+                        )
+                        session.add(default_deck)
+                        session.flush()
+                    deck_id = default_deck.id
+
+                card = Card(
+                    deck_id=deck_id,
+                    category_id=card_data.get("category_id"),
+                    front=front,
+                    back=back,
+                    explanation=card_data.get("explanation", ""),
+                    distractors=card_data.get("distractors", ""),
+                    tags=card_data.get("tags", ""),
+                    meta_info=card_data.get("meta_info", ""),
+                    source=source_url,
+                    is_ai_generated=card_data.get("is_ai_generated", False),
+                )
+                session.add(card)
+                cards_imported += 1
+
         except Exception as e:
             errors.append(f"Article {i}: {str(e)}")
 
     session.commit()
+    msg = f"导入完成：{imported} 篇文章已导入，{skipped} 篇跳过"
+    if cards_imported > 0:
+        msg += f"，{cards_imported} 张关联卡片已导入"
     return {
         "imported": imported,
         "skipped": skipped,
+        "cards_imported": cards_imported,
         "errors": errors,
-        "message": f"导入完成：{imported} 篇文章已导入，{skipped} 篇跳过",
+        "message": msg,
     }
 
 
