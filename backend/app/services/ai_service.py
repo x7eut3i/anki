@@ -153,7 +153,7 @@ class AIService:
         for attempt in range(retries):
             start_time = time.time()
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with httpx.AsyncClient(timeout=float(cfg.ai_timeout or 300)) as client:
                     response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
                 break  # Success
