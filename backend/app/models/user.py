@@ -15,8 +15,6 @@ class User(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Study preferences
-    daily_new_card_limit: int = Field(default=20)
-    daily_review_limit: int = Field(default=200)
     session_card_limit: int = Field(default=50)
     desired_retention: float = Field(default=0.9)
     study_question_mode: str = Field(default="custom")  # all_qa, all_choice, custom

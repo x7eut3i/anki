@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field
+from sqlmodel import SQLModel, Field, Index
 
 
 class ReviewLog(SQLModel, table=True):
     __tablename__ = "review_logs"
+    __table_args__ = (
+        Index("ix_rl_user_reviewed", "user_id", "reviewed_at"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)

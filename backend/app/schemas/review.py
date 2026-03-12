@@ -97,7 +97,10 @@ class StudySessionResponse(BaseModel):
 class StudyStatsResponse(BaseModel):
     total_cards: int
     cards_due_today: int
-    new_today: int
+    due_review_count: int  # Cards with progress, due now
+    new_available_count: int  # Cards without any progress
+    new_cards_reviewed_today: int  # New cards reviewed today
+    tomorrow_due_count: int  # Cards due tomorrow (user TZ)
     reviewed_today: int
     streak_days: int
     retention_rate: float

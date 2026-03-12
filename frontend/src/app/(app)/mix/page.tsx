@@ -352,30 +352,23 @@ export default function MixPage() {
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
             {/* Card count */}
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium whitespace-nowrap">每次练习:</label>
-              <div className="flex items-center gap-1">
-                {[10, 20, 30, 50].map((n) => (
-                  <button
-                    key={n}
-                    className={`px-2.5 py-1 rounded text-sm transition-colors ${
-                      cardCount === n
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700"
-                    }`}
-                    onClick={() => setCardCount(n)}
-                  >
-                    {n}张
-                  </button>
-                ))}
-                <Input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={cardCount}
-                  onChange={(e) => setCardCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 30)))}
-                  className="w-16 h-8 text-center text-sm"
-                />
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">每次练习</label>
+                <span className="text-sm font-bold text-primary">{cardCount} 张</span>
+              </div>
+              <input
+                type="range"
+                min={10}
+                max={200}
+                step={10}
+                value={cardCount}
+                onChange={(e) => setCardCount(parseInt(e.target.value))}
+                className="w-full accent-purple-500"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>10</span>
+                <span>200</span>
               </div>
             </div>
 

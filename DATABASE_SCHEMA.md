@@ -24,8 +24,6 @@
 | is_admin | BOOLEAN | | False | 是否管理员 |
 | created_at | DATETIME | | now(utc) | 创建时间 |
 | updated_at | DATETIME | | now(utc) | 更新时间 |
-| daily_new_card_limit | INTEGER | | 20 | 每日新卡数量限制 |
-| daily_review_limit | INTEGER | | 200 | 每日复习数量限制 |
 | session_card_limit | INTEGER | | 50 | 单次学习卡片数量限制 |
 | desired_retention | FLOAT | | 0.9 | 期望记忆保留率 |
 | ai_import_batch_size | INTEGER | | 30 | AI导入批次大小 |

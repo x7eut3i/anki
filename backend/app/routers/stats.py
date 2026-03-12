@@ -471,13 +471,14 @@ def get_study_stats(
         })
     by_category.sort(key=lambda x: -x["reviews"])
 
-    # Study sessions
+    # Study sessions — only count sessions that actually had reviews
     sessions = session.exec(
         select(StudySession).where(
             StudySession.user_id == current_user.id,
             StudySession.started_at >= dt_start,
             StudySession.started_at <= dt_end,
             StudySession.is_completed == True,
+            StudySession.cards_reviewed > 0,
         )
     ).all()
     total_sessions = len(sessions)

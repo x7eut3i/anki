@@ -1,11 +1,12 @@
 """Review service: handles card reviews, due card queries, and study stats."""
 
+import hashlib
 import json
 import random
 from datetime import datetime, timezone, timedelta
 
 from sqlmodel import Session, select, func, col, text
-from sqlalchemy import or_
+from sqlalchemy import and_, or_, case
 
 from app.models.card import Card, CardState
 from app.models.user_card_progress import UserCardProgress
@@ -35,11 +36,70 @@ class ReviewService:
             progress = UserCardProgress(
                 user_id=self.user_id,
                 card_id=card_id,
+                stability=0.0,
+                difficulty=0.0,
             )
             self.session.add(progress)
             self.session.commit()
             self.session.refresh(progress)
         return progress
+
+    # ── Shared filter helper ────────────────────────────────────────
+
+    def _resolve_card_filter(
+        self,
+        category_ids: list[int] | None,
+        deck_id: int | None,
+        deck_ids: list[int] | None,
+        tag_ids: list[int] | None,
+        exclude_ai_decks: bool = False,
+    ):
+        """Return a list of SQLAlchemy filter clauses and, if tag_ids
+        filter yielded no cards, a flag indicating an empty result."""
+        from app.models.deck import Deck
+
+        filters = []
+
+        if category_ids:
+            # Cards with explicit category_id, OR cards without category_id
+            # that belong to decks under the requested categories.
+            cat_deck_ids = [d.id for d in self.session.exec(
+                select(Deck).where(col(Deck.category_id).in_(category_ids))
+            ).all()]
+            conditions = [col(Card.category_id).in_(category_ids)]
+            if cat_deck_ids:
+                conditions.append(
+                    and_(
+                        Card.category_id == None,  # noqa: E711
+                        col(Card.deck_id).in_(cat_deck_ids),
+                    )
+                )
+            if deck_ids:
+                conditions.append(col(Card.deck_id).in_(deck_ids))
+            filters.append(or_(*conditions))
+        elif deck_ids:
+            filters.append(col(Card.deck_id).in_(deck_ids))
+        elif deck_id is not None:
+            filters.append(Card.deck_id == deck_id)
+
+        if exclude_ai_decks:
+            ai_deck_ids = [d.id for d in self.session.exec(
+                select(Deck).where(col(Deck.name).startswith("AI-"))
+            ).all()]
+            if ai_deck_ids:
+                filters.append(~col(Card.deck_id).in_(ai_deck_ids))
+
+        if tag_ids:
+            from app.models.tag import CardTag
+            tagged_ids = list(self.session.exec(
+                select(CardTag.card_id).where(col(CardTag.tag_id).in_(tag_ids))
+            ).all())
+            if tagged_ids:
+                filters.append(col(Card.id).in_(tagged_ids))
+            else:
+                return filters, True  # empty result
+
+        return filters, False
 
     def get_due_cards(
         self,
@@ -50,192 +110,146 @@ class ReviewService:
         exclude_ai_decks: bool = False,
         limit: int = 50,
     ) -> dict:
-        """Get cards due for review, prioritized by state and due date.
+        """Get cards due for review using two split queries.
 
-        Cards without a UserCardProgress record are treated as NEW and due now.
+        Query 1: due cards (INNER JOIN) — cards with progress, due <= now
+          Ordered: Relearning(3) > Learning(1) > Review(2), then by due ASC
+        Query 2: new cards — cards without progress (appended after due cards)
+          Ordered: date-seeded deterministic random
+
+        Priority: Relearning > Learning > Review > New
         """
-        from app.models.deck import Deck
         now = datetime.now(timezone.utc)
 
-        # LEFT JOIN Card with UserCardProgress for this user
-        query = (
+        card_filters, empty = self._resolve_card_filter(
+            category_ids, deck_id, deck_ids, tag_ids, exclude_ai_decks
+        )
+        if empty:
+            return {"cards": [], "total_due": 0, "new_count": 0, "review_count": 0, "relearning_count": 0}
+
+        card_valid = [(Card.expires_at == None) | (Card.expires_at > now)]
+
+        # ── Query 1: due cards (have progress, due <= now) ──
+        due_query = (
             select(Card, UserCardProgress)
-            .outerjoin(
+            .join(
                 UserCardProgress,
                 (UserCardProgress.card_id == Card.id)
                 & (UserCardProgress.user_id == self.user_id),
             )
             .where(
-                (Card.expires_at == None) | (Card.expires_at > now),
-                # Not suspended (NULL progress = not suspended)
-                or_(
-                    UserCardProgress.id == None,
-                    UserCardProgress.is_suspended == False,
-                ),
-                # Due: no progress (new) or progress.due <= now
-                or_(
-                    UserCardProgress.id == None,
-                    UserCardProgress.due <= now,
-                ),
+                *card_valid,
+                *card_filters,
+                UserCardProgress.is_suspended == False,
+                UserCardProgress.due <= now,
             )
+            .order_by(
+                # Relearning(3)=0, Learning(1)=1, Review(2)=2
+                text("""
+                    CASE user_card_progress.state
+                        WHEN 3 THEN 0
+                        WHEN 1 THEN 1
+                        WHEN 2 THEN 2
+                        ELSE 3
+                    END
+                """),
+                UserCardProgress.due.asc(),
+            )
+            .limit(limit)
         )
+        due_rows = self.session.exec(due_query).all()
 
-        # Category/deck filtering
-        # When category_ids is given, expand to include all decks in those categories
-        if category_ids:
-            from app.models.deck import Deck
-            cat_deck_ids = [d.id for d in self.session.exec(
-                select(Deck).where(col(Deck.category_id).in_(category_ids))
-            ).all()]
-            # Cards whose category_id matches OR whose deck_id belongs to a category deck
-            if cat_deck_ids:
-                if deck_ids:
-                    # Mix mode: merge deck_ids with category decks
-                    all_deck_ids = list(set(cat_deck_ids + list(deck_ids)))
-                    query = query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(all_deck_ids),
-                        )
-                    )
-                else:
-                    query = query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(cat_deck_ids),
-                        )
-                    )
-            else:
-                if deck_ids:
-                    query = query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(deck_ids),
-                        )
-                    )
-                else:
-                    query = query.where(col(Card.category_id).in_(category_ids))
-        elif deck_ids:
-            query = query.where(col(Card.deck_id).in_(deck_ids))
-        elif deck_id is not None:
-            query = query.where(Card.deck_id == deck_id)
-        if tag_ids:
-            from app.models.tag import CardTag
-            tagged_ids = self.session.exec(
-                select(CardTag.card_id).where(col(CardTag.tag_id).in_(tag_ids))
-            ).all()
-            if tagged_ids:
-                query = query.where(col(Card.id).in_(tagged_ids))
-            else:
-                # No cards match these tags
-                return {"cards": [], "total_due": 0, "new_count": 0, "review_count": 0, "relearning_count": 0}
-
-        # Priority: Relearning > Learning > New > Review
-        # Within each priority group: due cards by due date, new cards randomly
-        query = query.order_by(
-            text("""
-                CASE
-                    WHEN user_card_progress.state IS NULL THEN 2
-                    WHEN user_card_progress.state = 3 THEN 0
-                    WHEN user_card_progress.state = 1 THEN 1
-                    WHEN user_card_progress.state = 0 THEN 2
-                    WHEN user_card_progress.state = 2 THEN 3
-                END
-            """),
-            # For cards with progress, sort by due date; for new cards (NULL), randomize
-            text("""
-                CASE
-                    WHEN user_card_progress.id IS NULL THEN ABS(RANDOM()) % 1000000
-                    ELSE 0
-                END
-            """),
-            text("COALESCE(user_card_progress.due, '1970-01-01')"),
-        ).limit(limit)
-
-        rows = self.session.exec(query).all()
-
-        # Batch-lookup article info for all source URLs
-        article_cache = self._batch_lookup_articles([card for card, _ in rows])
-
-        # Build response: merge card + progress into dict-like objects
-        cards_with_progress = []
-        for card, progress in rows:
-            cards_with_progress.append(
-                self._merge_card_progress(card, progress, article_cache)
+        # ── Query 2: new cards (no progress) ── only if slots remain
+        remaining = limit - len(due_rows)
+        new_rows: list = []
+        if remaining > 0:
+            # Subquery: card IDs this user already has progress for
+            progress_subq = (
+                select(UserCardProgress.card_id)
+                .where(UserCardProgress.user_id == self.user_id)
             )
+            # Date-seeded deterministic random order
+            date_str = now.strftime("%Y-%m-%d")
+            seed = int(hashlib.md5(f"{self.user_id}:{date_str}".encode()).hexdigest()[:8], 16)
+            prime = 1000003
 
-        # Count by state
-        count_query = (
-            select(
-                func.coalesce(UserCardProgress.state, CardState.NEW),
-                func.count(),
+            new_query = (
+                select(Card)
+                .where(
+                    *card_valid,
+                    *card_filters,
+                    ~col(Card.id).in_(progress_subq),
+                )
+                .order_by(text(f"(cards.id * {seed}) % {prime}"))
+                .limit(remaining)
             )
-            .select_from(Card)
-            .outerjoin(
-                UserCardProgress,
-                (UserCardProgress.card_id == Card.id)
-                & (UserCardProgress.user_id == self.user_id),
-            )
+            new_cards_list = list(self.session.exec(new_query).all())
+            new_rows = [(card, None) for card in new_cards_list]
+
+        # Merge results: due first, then new
+        all_rows = list(due_rows) + new_rows
+
+        # Batch-lookup article info
+        article_cache = self._batch_lookup_articles([card for card, _ in all_rows])
+
+        cards_with_progress = [
+            self._merge_card_progress(card, progress, article_cache)
+            for card, progress in all_rows
+        ]
+
+        # ── Counts (two simple queries) ──
+        due_count = self.session.exec(
+            select(func.count())
+            .select_from(UserCardProgress)
+            .join(Card, Card.id == UserCardProgress.card_id)
             .where(
-                (Card.expires_at == None) | (Card.expires_at > now),
-                or_(
-                    UserCardProgress.id == None,
-                    UserCardProgress.is_suspended == False,
-                ),
-                or_(
-                    UserCardProgress.id == None,
-                    UserCardProgress.due <= now,
-                ),
+                *card_valid,
+                *card_filters,
+                UserCardProgress.user_id == self.user_id,
+                UserCardProgress.is_suspended == False,
+                UserCardProgress.due <= now,
             )
-        )
-        # Category/deck count filtering — must match main query logic
-        if category_ids:
-            from app.models.deck import Deck as DeckModel
-            cat_deck_ids_c = [d.id for d in self.session.exec(
-                select(DeckModel).where(col(DeckModel.category_id).in_(category_ids))
-            ).all()]
-            if cat_deck_ids_c:
-                if deck_ids:
-                    all_deck_ids_c = list(set(cat_deck_ids_c + list(deck_ids)))
-                    count_query = count_query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(all_deck_ids_c),
-                        )
-                    )
-                else:
-                    count_query = count_query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(cat_deck_ids_c),
-                        )
-                    )
-            else:
-                if deck_ids:
-                    count_query = count_query.where(
-                        or_(
-                            col(Card.category_id).in_(category_ids),
-                            col(Card.deck_id).in_(deck_ids),
-                        )
-                    )
-                else:
-                    count_query = count_query.where(col(Card.category_id).in_(category_ids))
-        elif deck_ids:
-            count_query = count_query.where(col(Card.deck_id).in_(deck_ids))
-        elif deck_id is not None:
-            count_query = count_query.where(Card.deck_id == deck_id)
-        count_query = count_query.group_by(
-            func.coalesce(UserCardProgress.state, CardState.NEW)
-        )
-        counts = {row[0]: row[1] for row in self.session.exec(count_query).all()}
+        ).one()
+
+        total_with_progress = self.session.exec(
+            select(func.count())
+            .select_from(UserCardProgress)
+            .join(Card, Card.id == UserCardProgress.card_id)
+            .where(
+                *card_valid,
+                *card_filters,
+                UserCardProgress.user_id == self.user_id,
+            )
+        ).one()
+
+        total_approved = self.session.exec(
+            select(func.count()).select_from(Card).where(*card_valid, *card_filters)
+        ).one()
+
+        new_count = max(0, total_approved - total_with_progress)
+
+        # State breakdown for due cards
+        state_counts = dict(self.session.exec(
+            select(UserCardProgress.state, func.count())
+            .join(Card, Card.id == UserCardProgress.card_id)
+            .where(
+                *card_valid,
+                *card_filters,
+                UserCardProgress.user_id == self.user_id,
+                UserCardProgress.is_suspended == False,
+                UserCardProgress.due <= now,
+            )
+            .group_by(UserCardProgress.state)
+        ).all())
 
         return {
             "cards": cards_with_progress,
-            "total_due": sum(counts.values()),
-            "new_count": counts.get(CardState.NEW, 0),
-            "review_count": counts.get(CardState.REVIEW, 0),
-            "relearning_count": counts.get(CardState.RELEARNING, 0) + counts.get(
-                CardState.LEARNING, 0
+            "total_due": due_count + new_count,
+            "new_count": new_count,
+            "review_count": state_counts.get(CardState.REVIEW, 0),
+            "relearning_count": (
+                state_counts.get(CardState.RELEARNING, 0)
+                + state_counts.get(CardState.LEARNING, 0)
             ),
         }
 
@@ -252,6 +266,7 @@ class ReviewService:
 
         # Build FSRS card data from progress
         card_data = {
+            "card_id": card_id,
             "due": progress.due if progress.due else now,
             "stability": progress.stability if progress.stability is not None else 0.0,
             "difficulty": progress.difficulty if progress.difficulty is not None else 0.0,
@@ -262,8 +277,11 @@ class ReviewService:
             "last_review": progress.last_review if progress.last_review else None,
         }
 
-        # Run FSRS
-        updated, log_data = self.fsrs.review_card(card_data, rating, now)
+        # Run FSRS — forward review_duration for Optimizer support
+        updated, log_data = self.fsrs.review_card(
+            card_data, rating, now,
+            review_duration=duration_ms if duration_ms else None,
+        )
 
         # Save review log
         review_log = ReviewLog(
@@ -321,6 +339,7 @@ class ReviewService:
 
         now = datetime.now(timezone.utc)
         card_data = {
+            "card_id": card_id,
             "due": progress.due if progress else now,
             "stability": progress.stability if progress else 0.0,
             "difficulty": progress.difficulty if progress else 0.0,
@@ -504,16 +523,22 @@ class ReviewService:
             now_local = datetime.now(tz)
             today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
             today_start = today_start_local.astimezone(timezone.utc)
+            tomorrow_end_local = today_start_local + timedelta(days=2)
+            tomorrow_end_utc = tomorrow_end_local.astimezone(timezone.utc)
+            today_end_local = today_start_local + timedelta(days=1)
+            today_end_utc = today_end_local.astimezone(timezone.utc)
         else:
             today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end_utc = today_start + timedelta(days=1)
+            tomorrow_end_utc = today_start + timedelta(days=2)
 
         # Total cards (shared — all cards)
         total = self.session.exec(
             select(func.count()).select_from(Card)
         ).one()
 
-        # Due today (cards with progress due now + new cards without progress)
-        due_with_progress = self.session.exec(
+        # Due review cards (have progress, due <= now, not suspended)
+        due_review_count = self.session.exec(
             select(func.count()).where(
                 UserCardProgress.user_id == self.user_id,
                 UserCardProgress.is_suspended == False,
@@ -521,7 +546,7 @@ class ReviewService:
             )
         ).one()
 
-        # New cards (no progress record for this user)
+        # New cards (no progress for this user, not expired)
         cards_with_progress = self.session.exec(
             select(func.count()).where(
                 UserCardProgress.user_id == self.user_id,
@@ -532,24 +557,34 @@ class ReviewService:
                 (Card.expires_at == None) | (Card.expires_at > now),
             )
         ).one()
-        new_cards = max(0, approved_cards - cards_with_progress)
-        due_today = due_with_progress + new_cards
+        new_available_count = max(0, approved_cards - cards_with_progress)
+        due_today = due_review_count + new_available_count
 
-        # Reviewed today
-        reviewed_today = self.session.exec(
-            select(func.count()).where(
+        # Batch: reviewed_today, time_today, new_cards_reviewed_today, retention (one query window)
+        today_agg = self.session.exec(
+            select(
+                func.count(),
+                func.coalesce(func.sum(ReviewLog.review_duration_ms), 0),
+                func.sum(case((ReviewLog.state == 0, 1), else_=0)),  # new cards = state 0 before review
+                func.sum(case((ReviewLog.rating == 1, 1), else_=0)),  # again count
+            ).where(
                 ReviewLog.user_id == self.user_id,
                 ReviewLog.reviewed_at >= today_start,
             )
         ).one()
+        reviewed_today = today_agg[0] or 0
+        time_today = today_agg[1] or 0
+        new_cards_reviewed_today = today_agg[2] or 0
 
-        # Time studied today
-        time_today = self.session.exec(
-            select(func.sum(ReviewLog.review_duration_ms)).where(
-                ReviewLog.user_id == self.user_id,
-                ReviewLog.reviewed_at >= today_start,
+        # Tomorrow due count: cards with progress whose due is between now and end of tomorrow
+        tomorrow_due_count = self.session.exec(
+            select(func.count()).where(
+                UserCardProgress.user_id == self.user_id,
+                UserCardProgress.is_suspended == False,
+                UserCardProgress.due > now,
+                UserCardProgress.due <= tomorrow_end_utc,
             )
-        ).one() or 0
+        ).one()
 
         # Cards by state (from UserCardProgress)
         state_counts = self.session.exec(
@@ -558,7 +593,7 @@ class ReviewService:
             ).group_by(UserCardProgress.state)
         ).all()
         cards_by_state = {
-            "new": new_cards, "learning": 0, "review": 0, "relearning": 0
+            "new": new_available_count, "learning": 0, "review": 0, "relearning": 0
         }
         state_names = {0: "new", 1: "learning", 2: "review", 3: "relearning"}
         for state_val, count in state_counts:
@@ -568,40 +603,41 @@ class ReviewService:
             else:
                 cards_by_state[name] = count
 
-        # Retention rate (last 30 days)
+        # Retention rate (last 30 days) — single query with conditional count
         thirty_days_ago = now - timedelta(days=30)
-        total_reviews_30d = self.session.exec(
-            select(func.count()).where(
+        ret_agg = self.session.exec(
+            select(
+                func.count(),
+                func.sum(case((ReviewLog.rating == 1, 1), else_=0)),
+            ).where(
                 ReviewLog.user_id == self.user_id,
                 ReviewLog.reviewed_at >= thirty_days_ago,
             )
-        ).one() or 0
-        again_reviews_30d = self.session.exec(
-            select(func.count()).where(
-                ReviewLog.user_id == self.user_id,
-                ReviewLog.reviewed_at >= thirty_days_ago,
-                ReviewLog.rating == 1,
-            )
-        ).one() or 0
+        ).one()
+        total_reviews_30d = ret_agg[0] or 0
+        again_reviews_30d = ret_agg[1] or 0
         retention_rate = (
             (total_reviews_30d - again_reviews_30d) / total_reviews_30d
             if total_reviews_30d > 0
             else 0.0
         )
 
-        # Streak (consecutive days with reviews)
+        # Streak (consecutive days with reviews) — single grouped query
         streak = self._calculate_streak(tz=tz)
 
-        # Category stats
+        # Category stats — batch queries
         cat_stats = self._get_category_stats()
 
-        # Daily reviews (last 30 days)
+        # Daily reviews (last 30 days) — single grouped query
         daily_reviews = self._get_daily_reviews(30, tz=tz)
 
         return {
             "total_cards": total,
             "cards_due_today": due_today,
-            "new_today": 0,
+            "due_review_count": due_review_count,
+            "new_available_count": new_available_count,
+            "new_cards_reviewed_today": new_cards_reviewed_today,
+            "tomorrow_due_count": tomorrow_due_count,
             "reviewed_today": reviewed_today,
             "streak_days": streak,
             "retention_rate": round(retention_rate, 4),
@@ -612,66 +648,80 @@ class ReviewService:
         }
 
     def _calculate_streak(self, tz=None) -> int:
-        """Calculate consecutive study days.
+        """Calculate consecutive study days using a single grouped query.
 
-        If today has reviews, count today + consecutive past days.
-        If today has no reviews yet, count from yesterday backwards
-        (the user hasn't studied yet today but their streak isn't lost).
-
-        When *tz* (a ZoneInfo instance) is provided, "today" is defined in
-        the user's local timezone rather than UTC.  Day boundaries are
-        converted to UTC before querying the database.
+        Fetches all distinct review dates in the last 365 days, then counts
+        consecutive days in Python.
         """
         if tz:
-            from zoneinfo import ZoneInfo
             now_local = datetime.now(tz)
         else:
             now_local = datetime.now(timezone.utc)
 
         today_start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        tomorrow_start_local = today_start_local + timedelta(days=1)
+        lookback_start = today_start_local - timedelta(days=365)
+        lookback_start_utc = lookback_start.astimezone(timezone.utc)
 
-        # Convert local day boundaries to UTC for DB queries
-        today_start_utc = today_start_local.astimezone(timezone.utc)
-        tomorrow_start_utc = tomorrow_start_local.astimezone(timezone.utc)
-
-        # Check if user has studied today
-        today_count = self.session.exec(
-            select(func.count()).where(
-                ReviewLog.user_id == self.user_id,
-                ReviewLog.reviewed_at >= today_start_utc,
-                ReviewLog.reviewed_at < tomorrow_start_utc,
-            )
-        ).one()
-
-        streak = 0
-        if today_count > 0:
-            streak = 1
-            check_date = today_start_local - timedelta(days=1)
+        # Single query: get all distinct dates with reviews
+        if tz:
+            # Need to group by date in user's timezone
+            # Use SQLite date arithmetic: reviewed_at + offset
+            utc_offset_seconds = now_local.utcoffset().total_seconds()
+            offset_str = f"+{int(utc_offset_seconds)} seconds" if utc_offset_seconds >= 0 else f"{int(utc_offset_seconds)} seconds"
+            rows = self.session.exec(
+                text(
+                    "SELECT DISTINCT DATE(reviewed_at, :offset) as d "
+                    "FROM review_logs "
+                    "WHERE user_id = :uid AND reviewed_at >= :start "
+                    "ORDER BY d DESC"
+                ),
+                params={"offset": offset_str, "uid": self.user_id, "start": lookback_start_utc},
+            ).all()
         else:
-            # Start from yesterday — streak not broken yet
-            check_date = today_start_local - timedelta(days=1)
+            rows = self.session.exec(
+                text(
+                    "SELECT DISTINCT DATE(reviewed_at) as d "
+                    "FROM review_logs "
+                    "WHERE user_id = :uid AND reviewed_at >= :start "
+                    "ORDER BY d DESC"
+                ),
+                params={"uid": self.user_id, "start": lookback_start_utc},
+            ).all()
 
-        for _ in range(365):
-            day_start_utc = check_date.astimezone(timezone.utc)
-            day_end_utc = (check_date + timedelta(days=1)).astimezone(timezone.utc)
-            count = self.session.exec(
-                select(func.count()).where(
-                    ReviewLog.user_id == self.user_id,
-                    ReviewLog.reviewed_at >= day_start_utc,
-                    ReviewLog.reviewed_at < day_end_utc,
-                )
-            ).one()
-            if count > 0:
-                streak += 1
-                check_date -= timedelta(days=1)
-            else:
-                break
+        if not rows:
+            return 0
+
+        # Convert to date set — rows are sqlalchemy.engine.row.Row, use [0]
+        from datetime import date as date_type
+        review_dates: set[date_type] = set()
+        for row in rows:
+            d_val = row[0]
+            if isinstance(d_val, str):
+                review_dates.add(date_type.fromisoformat(d_val))
+            elif isinstance(d_val, date_type):
+                review_dates.add(d_val)
+
+        today = today_start_local.date()
+        streak = 0
+        if today in review_dates:
+            streak = 1
+            check = today - timedelta(days=1)
+        else:
+            # Today not yet studied — start from yesterday
+            check = today - timedelta(days=1)
+
+        while check in review_dates:
+            streak += 1
+            check -= timedelta(days=1)
+
         return streak
 
     def _get_category_stats(self) -> list[dict]:
-        """Get per-category card count and due count."""
-        results = self.session.exec(
+        """Get per-category card count and due count using batch queries."""
+        now = datetime.now(timezone.utc)
+
+        # Query 1: category info with total card count
+        cat_rows = self.session.exec(
             select(
                 Category.id,
                 Category.name,
@@ -683,80 +733,102 @@ class ReviewService:
             .order_by(Category.sort_order)
         ).all()
 
+        if not cat_rows:
+            return []
+
+        cat_ids = [r[0] for r in cat_rows]
+
+        # Query 2: due progress count per category (batch)
+        due_by_cat = dict(self.session.exec(
+            select(Card.category_id, func.count())
+            .select_from(UserCardProgress)
+            .join(Card, Card.id == UserCardProgress.card_id)
+            .where(
+                UserCardProgress.user_id == self.user_id,
+                UserCardProgress.is_suspended == False,
+                UserCardProgress.due <= now,
+                col(Card.category_id).in_(cat_ids),
+            )
+            .group_by(Card.category_id)
+        ).all())
+
+        # Query 3: cards with progress per category (batch)
+        prog_by_cat = dict(self.session.exec(
+            select(Card.category_id, func.count())
+            .select_from(UserCardProgress)
+            .join(Card, Card.id == UserCardProgress.card_id)
+            .where(
+                UserCardProgress.user_id == self.user_id,
+                col(Card.category_id).in_(cat_ids),
+            )
+            .group_by(Card.category_id)
+        ).all())
+
         stats = []
-        now = datetime.now(timezone.utc)
-        for cat_id, name, icon, count in results:
-            # Due count: progress-based due + new cards in this category
-            due_progress = self.session.exec(
-                select(func.count())
-                .select_from(UserCardProgress)
-                .join(Card, Card.id == UserCardProgress.card_id)
-                .where(
-                    UserCardProgress.user_id == self.user_id,
-                    Card.category_id == cat_id,
-                    UserCardProgress.is_suspended == False,
-                    UserCardProgress.due <= now,
-                )
-            ).one()
-
-            # Cards in category without progress = new/due
-            cards_with_prog = self.session.exec(
-                select(func.count())
-                .select_from(UserCardProgress)
-                .join(Card, Card.id == UserCardProgress.card_id)
-                .where(
-                    UserCardProgress.user_id == self.user_id,
-                    Card.category_id == cat_id,
-                )
-            ).one()
-            total_approved_cat = self.session.exec(
-                select(func.count()).where(
-                    Card.category_id == cat_id,
-                )
-            ).one()
-            new_in_cat = max(0, total_approved_cat - cards_with_prog)
-            due = due_progress + new_in_cat
-
+        for cat_id, name, icon, total_count in cat_rows:
+            due_progress = due_by_cat.get(cat_id, 0)
+            with_prog = prog_by_cat.get(cat_id, 0)
+            new_in_cat = max(0, total_count - with_prog)
             stats.append({
                 "category_id": cat_id,
                 "name": name,
                 "icon": icon,
-                "total_cards": count,
-                "due_count": due,
+                "total_cards": total_count,
+                "due_count": due_progress + new_in_cat,
             })
         return stats
 
     def _get_daily_reviews(self, days: int, tz=None) -> list[dict]:
-        """Get review counts for the last N days.
-
-        When *tz* is provided, day boundaries are computed in the user's
-        local timezone.
-        """
+        """Get review counts for the last N days using a single grouped query."""
         if tz:
             now_local = datetime.now(tz)
         else:
             now_local = datetime.now(timezone.utc)
 
+        start_local = (now_local - timedelta(days=days - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        start_utc = start_local.astimezone(timezone.utc)
+
+        # Single query: group reviews by date
+        if tz:
+            utc_offset_seconds = now_local.utcoffset().total_seconds()
+            offset_str = f"+{int(utc_offset_seconds)} seconds" if utc_offset_seconds >= 0 else f"{int(utc_offset_seconds)} seconds"
+            rows = self.session.exec(
+                text(
+                    "SELECT DATE(reviewed_at, :offset) as d, COUNT(*) as c "
+                    "FROM review_logs "
+                    "WHERE user_id = :uid AND reviewed_at >= :start "
+                    "GROUP BY d ORDER BY d"
+                ),
+                params={"offset": offset_str, "uid": self.user_id, "start": start_utc},
+            ).all()
+        else:
+            rows = self.session.exec(
+                text(
+                    "SELECT DATE(reviewed_at) as d, COUNT(*) as c "
+                    "FROM review_logs "
+                    "WHERE user_id = :uid AND reviewed_at >= :start "
+                    "GROUP BY d ORDER BY d"
+                ),
+                params={"uid": self.user_id, "start": start_utc},
+            ).all()
+
+        # Build date→count map
+        count_map = {}
+        for row in rows:
+            count_map[row[0]] = row[1]
+
+        # Fill in all dates (including zeros)
         daily = []
         for i in range(days):
-            day_start_local = (now_local - timedelta(days=i)).replace(
+            day = (now_local - timedelta(days=days - 1 - i)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-            day_end_local = day_start_local + timedelta(days=1)
-            day_start_utc = day_start_local.astimezone(timezone.utc)
-            day_end_utc = day_end_local.astimezone(timezone.utc)
-            count = self.session.exec(
-                select(func.count()).where(
-                    ReviewLog.user_id == self.user_id,
-                    ReviewLog.reviewed_at >= day_start_utc,
-                    ReviewLog.reviewed_at < day_end_utc,
-                )
-            ).one()
-            daily.append({
-                "date": day_start_local.strftime("%Y-%m-%d"),
-                "count": count,
-            })
-        return list(reversed(daily))
+            date_str = day.strftime("%Y-%m-%d")
+            daily.append({"date": date_str, "count": count_map.get(date_str, 0)})
+
+        return daily
 
     def get_cards_by_ids(self, card_ids: list[int]) -> list[dict]:
         """Fetch cards by IDs with their progress info (no SRS filtering).
@@ -851,8 +923,8 @@ class ReviewService:
             "updated_at": card.updated_at,
             # Progress fields
             "due": progress.due if progress else now,
-            "stability": progress.stability if progress else 0.0,
-            "difficulty": progress.difficulty if progress else 0.0,
+            "stability": (progress.stability if progress.stability is not None else 0.0) if progress else 0.0,
+            "difficulty": (progress.difficulty if progress.difficulty is not None else 0.0) if progress else 0.0,
             "state": progress.state if progress else CardState.NEW,
             "reps": progress.reps if progress else 0,
             "lapses": progress.lapses if progress else 0,
@@ -869,6 +941,7 @@ class ReviewService:
         # Scheduling preview: compute next-due for each rating
         try:
             card_data = {
+                "card_id": card.id,
                 "due": d["due"],
                 "stability": d["stability"],
                 "difficulty": d["difficulty"],

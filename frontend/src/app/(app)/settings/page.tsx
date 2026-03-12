@@ -32,9 +32,7 @@ const TIMEZONE_OPTIONS = [
 export default function SettingsPage() {
   const { token, user, setAuth, logout } = useAuthStore();
   const [profile, setProfile] = useState<any>(null);
-  const [dailyGoal, setDailyGoal] = useState(50);
   const [desiredRetention, setDesiredRetention] = useState(0.9);
-  const [sessionLimit, setSessionLimit] = useState(50);
   const [userTimezone, setUserTimezone] = useState("Asia/Shanghai");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
@@ -52,9 +50,7 @@ export default function SettingsPage() {
     if (!token) return;
     auth.me(token).then((data) => {
       setProfile(data);
-      setDailyGoal(data.daily_new_card_limit || 50);
       setDesiredRetention(data.desired_retention || 0.9);
-      setSessionLimit(data.session_card_limit || 50);
       setUserTimezone(data.timezone || "Asia/Shanghai");
       setEmail(data.email || "");
     });
@@ -74,9 +70,7 @@ export default function SettingsPage() {
         },
         body: JSON.stringify({
           email: email || undefined,
-          daily_new_card_limit: dailyGoal,
           desired_retention: desiredRetention,
-          session_card_limit: sessionLimit,
           timezone: userTimezone,
         }),
       });
@@ -246,30 +240,6 @@ export default function SettingsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div>
-            <label className="text-sm font-medium">每日新卡数量</label>
-            <Input
-              type="number"
-              value={dailyGoal}
-              onChange={(e) => setDailyGoal(parseInt(e.target.value) || 20)}
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              每天最多学习多少张新卡片
-            </p>
-          </div>
-          <div>
-            <label className="text-sm font-medium">每次学习上限</label>
-            <Input
-              type="number"
-              min="10"
-              max="200"
-              value={sessionLimit}
-              onChange={(e) => setSessionLimit(parseInt(e.target.value) || 50)}
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              每次学习 session 最多包含多少张卡片
-            </p>
-          </div>
           <div>
             <label className="text-sm font-medium">期望记忆保持率</label>
             <Input

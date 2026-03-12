@@ -71,10 +71,10 @@ class TestMe:
 
     def test_update_me(self, client: TestClient, auth_headers: dict):
         response = client.put("/api/auth/me", headers=auth_headers, json={
-            "daily_new_card_limit": 30,
+            "session_card_limit": 30,
             "desired_retention": 0.85,
         })
         assert response.status_code == 200
         data = response.json()
-        assert data["daily_new_card_limit"] == 30
+        assert data["session_card_limit"] == 30
         assert data["desired_retention"] == 0.85

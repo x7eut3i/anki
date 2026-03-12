@@ -7,7 +7,6 @@ import { review, categories as catApi, reading } from "@/lib/api";
 import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import {
   BookOpen,
@@ -106,11 +105,14 @@ export default function DashboardPage() {
   }
 
   const todayReviews = stats?.reviewed_today || 0;
-  const dailyGoal = stats?.max_daily_calls || 50;
+  const newCardsToday = stats?.new_cards_reviewed_today || 0;
   const streak = stats?.streak_days || 0;
   const retention = stats?.retention_rate || 0;
   const totalCards = stats?.total_cards || 0;
+  const dueReviewCount = stats?.due_review_count || 0;
+  const newAvailableCount = stats?.new_available_count || 0;
   const dueCount = stats?.cards_due_today || 0;
+  const tomorrowDue = stats?.tomorrow_due_count || 0;
 
   return (
     <div className="space-y-6">
@@ -221,7 +223,7 @@ export default function DashboardPage() {
               <span className="relative group">
                 <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
                 <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  今天已完成的复习次数 / 每日目标次数。坚持每天完成复习目标有助于巩固记忆。
+                  今天已完成的复习次数。坚持每天复习有助于巩固记忆。
                 </span>
               </span>
             </CardTitle>
@@ -229,12 +231,14 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {todayReviews} / {dailyGoal}
+              {todayReviews}
+              {newCardsToday > 0 && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  （新卡 {newCardsToday}）
+                </span>
+              )}
             </div>
-            <Progress
-              value={Math.min((todayReviews / dailyGoal) * 100, 100)}
-              className="mt-2"
-            />
+            <p className="text-xs text-muted-foreground mt-1">今日已复习卡片数</p>
           </CardContent>
         </Card>
 
@@ -287,7 +291,7 @@ export default function DashboardPage() {
               <span className="relative group">
                 <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
                 <span className="absolute bottom-full right-0 mb-1 w-52 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  根据间隔重复算法(FSRS)计算出今天到期需要复习的卡片数量。及时复习能防止遗忘。
+                  到期复习：已学过、到期需要复习的卡片。新卡：还没学过的卡片。明日到期数会随今天的复习变化。
                 </span>
               </span>
             </CardTitle>
@@ -296,8 +300,13 @@ export default function DashboardPage() {
           <CardContent>
             <div className="text-2xl font-bold text-primary">{dueCount}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              共 {totalCards} 张卡片
+              到期 {dueReviewCount} + 新卡 {newAvailableCount}
             </p>
+            {tomorrowDue > 0 && (
+              <p className="text-xs text-muted-foreground">
+                明日到期 {tomorrowDue} 张
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

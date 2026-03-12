@@ -37,8 +37,7 @@
 | is_admin | bool | default False |
 | created_at | datetime | default utcnow |
 | updated_at | datetime | default utcnow |
-| daily_new_limit | int | default 20 |
-| daily_review_limit | int | default 200 |
+| session_card_limit | int | default 50 |
 | quiz_default_count | int | default 50 |
 | target_retention | float | default 0.9 |
 | session_max_minutes | int | default 30 |

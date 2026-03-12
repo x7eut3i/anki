@@ -46,10 +46,12 @@ export default function StudyPage() {
   const [reviewedCount, setReviewedCount] = useState(0);
   const [pendingSession, setPendingSession] = useState<any>(null);
   const [sessionId, setSessionId] = useState<number | null>(null);
+  const sessionIdRef = useRef<number | null>(null);
   const [cardStartTime, setCardStartTime] = useState<number>(Date.now());
 
   // Buffered answers for batch submission
   const [bufferedAnswers, setBufferedAnswers] = useState<{ card_id: number; rating: number; review_duration_ms?: number }[]>([]);
+  const bufferedAnswersRef = useRef<{ card_id: number; rating: number; review_duration_ms?: number }[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   // Track which rating was given per card (for highlighting when navigating back)
@@ -63,6 +65,7 @@ export default function StudyPage() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [questionMode, setQuestionMode] = useState<"all_choice" | "all_qa" | "custom">("custom");
   const [customRatio, setCustomRatio] = useState<number>(60);
+  const [cardLimit, setCardLimit] = useState<number>(50);
 
   // Q&A/choice ratio: pre-compute for each card
   const [forceTypeMap, setForceTypeMap] = useState<Record<number, "qa" | "choice">>({});
@@ -86,6 +89,9 @@ export default function StudyPage() {
     setForceTypeMap(map);
   }, [questionMode, customRatio]);
 
+  // Keep refs in sync with state for stable callbacks
+  bufferedAnswersRef.current = bufferedAnswers;
+  sessionIdRef.current = sessionId;
 
   // Check for an unfinished session first (exclude quiz sessions)
   const checkActiveSession = useCallback(async () => {
@@ -112,9 +118,14 @@ export default function StudyPage() {
     setLoading(true);
     setCompleted(false);
     setPendingSession(null);
+    // Reset all per-round state so round 2+ works correctly
+    completedFlushRef.current = false;
+    autoSaveFiredRef.current = false;
+    setBufferedAnswers([]);
+    setReviewedCount(0);
+    setRatingsMap({});
     try {
       // Create a study session which fetches and stores due cards
-      const cardLimit = parseInt(params.get("limit") || "50") || 50;
       const sessionParams: any = { mode: mode === "mix" ? "mix" : "review", card_limit: cardLimit };
       sessionParams.question_mode = questionMode;
       sessionParams.custom_ratio = customRatio;
@@ -126,14 +137,10 @@ export default function StudyPage() {
       const session = await review.createSession(sessionParams, token);
       if (session && session.total_cards > 0) {
         setSessionId(session.id);
-        // Now fetch the actual card data
-        const dueParams: any = { limit: cardLimit };
-        if (categoryIds.length > 0) dueParams.category_ids = categoryIds;
-        if (deckIds.length > 0) dueParams.deck_ids = deckIds;
-        else if (deckId) dueParams.deck_id = parseInt(deckId);
-        if (tagIds.length > 0) dueParams.tag_ids = tagIds;
-        if (excludeAi) dueParams.exclude_ai_decks = true;
-        const data = await review.getDue(dueParams, token);
+        // Fetch the exact cards stored in the session (not a fresh getDue)
+        // so that the cards shown match the session's remaining_card_ids.
+        const sessionCardIds: number[] = JSON.parse(session.all_card_ids || session.remaining_card_ids || "[]");
+        const data = await review.getDue({ card_ids: sessionCardIds }, token);
         if (data.cards && data.cards.length > 0) {
           setCards(data.cards);
           computeForceTypes(data.cards);
@@ -165,7 +172,7 @@ export default function StudyPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, setCards, categoryIds, deckId, deckIds, mode]);
+  }, [token, setCards, categoryIds, deckId, deckIds, mode, cardLimit, computeForceTypes, questionMode, customRatio, excludeAi, tagIds]);
 
   // Resume an unfinished session (with history of reviewed cards)
   const _resumeWithHistory = useCallback(async (sess: any) => {
@@ -236,13 +243,13 @@ export default function StudyPage() {
         await fetch(`${API_BASE}/api/auth/me`, {
           method: "PUT",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ study_question_mode: questionMode, study_custom_ratio: customRatio }),
+          body: JSON.stringify({ study_question_mode: questionMode, study_custom_ratio: customRatio, session_card_limit: cardLimit }),
         });
       } catch { /* non-critical */ }
     }
     setShowTypeConfig(false);
     await loadCards();
-  }, [questionMode, customRatio, loadCards, token]);
+  }, [questionMode, customRatio, cardLimit, loadCards, token]);
 
   useEffect(() => {
     const init = async () => {
@@ -257,6 +264,13 @@ export default function StudyPage() {
           ]);
           if (me.study_question_mode) setQuestionMode(me.study_question_mode);
           if (me.study_custom_ratio != null) setCustomRatio(me.study_custom_ratio);
+          // URL limit param (from mix page) takes priority over user default
+          const urlLimit = params.get("limit");
+          if (urlLimit) {
+            setCardLimit(Math.max(10, Math.min(200, parseInt(urlLimit) || 50)));
+          } else if (me.session_card_limit) {
+            setCardLimit(me.session_card_limit);
+          }
           setSettingsLoaded(true);
           setAllTagsCache(tagsList);
         } catch { /* use defaults */ }
@@ -290,32 +304,17 @@ export default function StudyPage() {
     return () => reset();
   }, []);
 
-  // Auto-flush when all cards completed
-  const completedFlushRef = useRef(false);
-  useEffect(() => {
-    if (completed && bufferedAnswers.length > 0 && !completedFlushRef.current) {
-      completedFlushRef.current = true;
-      flushAnswers();
-    }
-  }, [completed, bufferedAnswers.length]);
-
-  // Reset timer when card changes
-  useEffect(() => {
-    if (!currentCards[currentIndex]) return;
-    setCardStartTime(Date.now());
-  }, [currentCards, currentIndex]);
-
   // --- Auto-save flag to prevent double-fire ---
   const autoSaveFiredRef = useRef(false);
 
   // Flush buffered answers to server in one batch
   const flushAnswers = useCallback(async (answers?: typeof bufferedAnswers) => {
-    const toFlush = answers || bufferedAnswers;
+    const toFlush = answers || [...bufferedAnswersRef.current];
     if (toFlush.length === 0 || !token) return;
     autoSaveFiredRef.current = true; // Prevent auto-save from duplicating
     setIsSaving(true);
     try {
-      await review.batchAnswer(toFlush, token, sessionId);
+      await review.batchAnswer(toFlush, token, sessionIdRef.current);
     } catch (err) {
       console.error("Batch submit failed, falling back to single:", err);
       for (const a of toFlush) {
@@ -325,20 +324,35 @@ export default function StudyPage() {
     if (!answers) setBufferedAnswers([]);
     setIsSaving(false);
     autoSaveFiredRef.current = false; // Allow future auto-saves for new answers
-  }, [bufferedAnswers, token, sessionId]);
+  }, [token]);
+
+  // Auto-flush when all cards completed
+  const completedFlushRef = useRef(false);
+  useEffect(() => {
+    if (completed && bufferedAnswers.length > 0 && !completedFlushRef.current) {
+      completedFlushRef.current = true;
+      flushAnswers();
+    }
+  }, [completed, bufferedAnswers.length, flushAnswers]);
+
+  // Reset timer when card changes
+  useEffect(() => {
+    if (!currentCards[currentIndex]) return;
+    setCardStartTime(Date.now());
+  }, [currentCards, currentIndex]);
 
   // --- Auto-save on page leave ---
   const autoSaveStudyRef = useRef<() => void>();
   autoSaveStudyRef.current = () => {
     if (autoSaveFiredRef.current) return;
-    if (!token || bufferedAnswers.length === 0) return;
+    if (!token || bufferedAnswersRef.current.length === 0) return;
     autoSaveFiredRef.current = true;
     // Use fetch with keepalive for reliability during page unload
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
     fetch(`${apiBase}/api/review/batch-answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ answers: bufferedAnswers, session_id: sessionId }),
+      body: JSON.stringify({ answers: bufferedAnswersRef.current, session_id: sessionIdRef.current }),
       keepalive: true,
     }).catch(() => {});
   };
@@ -466,6 +480,27 @@ export default function StudyPage() {
               />
             </div>
           )}
+        </div>
+
+        {/* Card count slider */}
+        <div className="w-full p-3 rounded-lg bg-muted/50 space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-medium">学习数量</span>
+            <span className="font-bold text-primary">{cardLimit} 张</span>
+          </div>
+          <input
+            type="range"
+            min={10}
+            max={200}
+            step={10}
+            value={cardLimit}
+            onChange={(e) => setCardLimit(parseInt(e.target.value))}
+            className="w-full accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>10</span>
+            <span>200</span>
+          </div>
         </div>
 
         <Button

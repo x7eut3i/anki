@@ -20,6 +20,12 @@ def get_columns(cursor: sqlite3.Cursor, table: str) -> set[str]:
     return {row[1] for row in cursor.fetchall()}
 
 
+def get_indexes(cursor: sqlite3.Cursor) -> set[str]:
+    """Get existing index names across all tables."""
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    return {row[0] for row in cursor.fetchall()}
+
+
 def migrate(db_path: str):
     """Add new columns to existing database."""
     conn = sqlite3.connect(db_path)
@@ -44,6 +50,8 @@ def migrate(db_path: str):
     # Drop deprecated columns
     drop_columns = [
         ("article_analyses", "author"),
+        ("users", "daily_new_card_limit"),
+        ("users", "daily_review_limit"),
     ]
     for table, column in drop_columns:
         existing = get_columns(cursor, table)
@@ -60,6 +68,20 @@ def migrate(db_path: str):
                 print(f"  ⚠️  SQLite < 3.35.0, cannot drop {table}.{column}")
         else:
             print(f"  ⏭  {table}.{column} already removed")
+
+    # Create composite indexes for performance
+    indexes = [
+        ("ix_ucp_user_due", "user_card_progress", "user_id, due"),
+        ("ix_rl_user_reviewed", "review_logs", "user_id, reviewed_at"),
+    ]
+    existing_indexes = get_indexes(cursor)
+    for idx_name, table, columns in indexes:
+        if idx_name not in existing_indexes:
+            cursor.execute(f"CREATE INDEX {idx_name} ON {table} ({columns})")
+            print(f"  ✅ Created index {idx_name} on {table}({columns})")
+            applied += 1
+        else:
+            print(f"  ⏭  Index {idx_name} already exists")
 
     conn.commit()
     conn.close()

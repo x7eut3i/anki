@@ -18,8 +18,6 @@ class UserResponse(BaseModel):
     email: str
     is_active: bool
     is_admin: bool
-    daily_new_card_limit: int
-    daily_review_limit: int
     session_card_limit: int
     desired_retention: float
     ai_import_batch_size: int
@@ -32,8 +30,6 @@ class UserResponse(BaseModel):
 
 class UserUpdate(BaseModel):
     email: str | None = None
-    daily_new_card_limit: int | None = None
-    daily_review_limit: int | None = None
     session_card_limit: int | None = None
     desired_retention: float | None = None
     ai_import_batch_size: int | None = None

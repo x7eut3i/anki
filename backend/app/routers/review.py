@@ -121,6 +121,8 @@ def batch_submit_reviews(
             results.append(result)
             reviewed_card_ids.append(ans.card_id)
         except Exception as e:
+            # Rollback so subsequent cards in the batch can still proceed
+            service.session.rollback()
             errors.append({"card_id": ans.card_id, "error": str(e)})
 
     # Update study session if provided

@@ -37,23 +37,18 @@ class QuizService:
             cat_deck_ids = [d.id for d in self.session.exec(
                 select(Deck).where(col(Deck.category_id).in_(category_ids))
             ).all()]
+            conditions = [col(Card.category_id).in_(category_ids)]
             if cat_deck_ids:
-                if deck_ids:
-                    all_dk = list(set(cat_deck_ids + list(deck_ids)))
-                    query = query.where(
-                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(all_dk))
+                from sqlalchemy import and_
+                conditions.append(
+                    and_(
+                        Card.category_id == None,  # noqa: E711
+                        col(Card.deck_id).in_(cat_deck_ids),
                     )
-                else:
-                    query = query.where(
-                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(cat_deck_ids))
-                    )
-            else:
-                if deck_ids:
-                    query = query.where(
-                        or_(col(Card.category_id).in_(category_ids), col(Card.deck_id).in_(deck_ids))
-                    )
-                else:
-                    query = query.where(col(Card.category_id).in_(category_ids))
+                )
+            if deck_ids:
+                conditions.append(col(Card.deck_id).in_(deck_ids))
+            query = query.where(or_(*conditions))
         elif deck_ids:
             query = query.where(col(Card.deck_id).in_(deck_ids))
 

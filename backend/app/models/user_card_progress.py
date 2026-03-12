@@ -1,13 +1,14 @@
 """Per-user FSRS scheduling progress for shared cards."""
 
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, UniqueConstraint
+from sqlmodel import SQLModel, Field, UniqueConstraint, Index
 
 
 class UserCardProgress(SQLModel, table=True):
     __tablename__ = "user_card_progress"
     __table_args__ = (
         UniqueConstraint("user_id", "card_id", name="uq_user_card"),
+        Index("ix_ucp_user_due", "user_id", "due"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
