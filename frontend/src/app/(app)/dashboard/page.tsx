@@ -7,17 +7,14 @@ import { review, categories as catApi, reading } from "@/lib/api";
 import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   BookOpen,
-  TrendingUp,
   Target,
   Calendar,
   Flame,
   Brain,
   ClipboardCheck,
   PlayCircle,
-  HelpCircle,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -113,13 +110,31 @@ export default function DashboardPage() {
   const newAvailableCount = stats?.new_available_count || 0;
   const dueCount = stats?.cards_due_today || 0;
   const tomorrowDue = stats?.tomorrow_due_count || 0;
+  const timeMs = stats?.time_studied_today_ms || 0;
+  const timeMin = Math.round(timeMs / 60000);
+
+  // Dynamic greeting based on app data
+  const greetingLine = (() => {
+    const hour = new Date().getHours();
+    if (todayReviews === 0 && dueCount > 0)
+      return `${dueCount} 张卡片待复习，现在开始吧`;
+    if (todayReviews > 0 && dueCount === 0)
+      return `今日任务已清零！已学 ${timeMin} 分钟`;
+    if (streak >= 7)
+      return `连续打卡 ${streak} 天 🔥 保持节奏`;
+    if (retention >= 0.9 && todayReviews > 0)
+      return `保留率 ${(retention * 100).toFixed(0)}%，记忆状态很好`;
+    if (hour < 12) return "上午好，开始今天的学习吧";
+    if (hour < 18) return "下午好，利用碎片时间复习一组";
+    return "晚上好，睡前复习效果更佳";
+  })();
 
   return (
     <div className="space-y-6">
       {/* Greeting */}
       <div>
         <h2 className="text-3xl font-bold tracking-tight">学习概览</h2>
-        <p className="text-muted-foreground">坚持每天复习，离上岸更近一步 💪</p>
+        <p className="text-muted-foreground">{greetingLine}</p>
       </div>
 
       {/* Resume session banner */}
@@ -218,95 +233,74 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 gap-2 md:gap-4 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-1">
-              今日复习
-              <span className="relative group">
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
-                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  今天已完成的复习次数。坚持每天复习有助于巩固记忆。
-                </span>
-              </span>
-            </CardTitle>
+            <CardTitle className="text-sm font-medium">今日复习</CardTitle>
             <BookOpen className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="text-2xl font-bold tabular-nums">
               {todayReviews}
               {newCardsToday > 0 && (
-                <span className="text-sm font-normal text-muted-foreground ml-2">
-                  （新卡 {newCardsToday}）
-                </span>
+                <span className="text-sm font-medium text-blue-500 ml-1.5">+{newCardsToday}新</span>
               )}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">今日已复习卡片数</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {timeMin > 0 ? `学习 ${timeMin} 分钟` : "今天还没开始"}
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-1">
-              连续学习
-              <span className="relative group">
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
-                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-48 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  连续每天至少完成一次复习的天数。中断一天会重新计数。
-                </span>
-              </span>
-            </CardTitle>
-            <Flame className="h-4 w-4 text-orange-500" />
+            <CardTitle className="text-sm font-medium">连续学习</CardTitle>
+            <Flame className={`h-4 w-4 ${streak > 0 ? "text-orange-500" : "text-muted-foreground"}`} />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{streak} 天</div>
-            <p className="text-xs text-muted-foreground mt-1">保持连续打卡</p>
+            <div className="text-2xl font-bold tabular-nums">
+              {streak}<span className="text-sm font-medium text-muted-foreground ml-0.5">天</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {streak === 0 ? "今天开始打卡" : streak >= 7 ? "🔥 状态很好" : "继续保持"}
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-1">
-              记忆保持率
-              <span className="relative group">
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
-                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-56 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  复习时回答正确（评为 Good 或 Easy）的比例。≥90% 为优秀，≥80% 为良好，&lt;80% 需要加强复习频率或降低新卡数量。
-                </span>
-              </span>
-            </CardTitle>
-            <Target className="h-4 w-4 text-green-500" />
+            <CardTitle className="text-sm font-medium">记忆保持率</CardTitle>
+            <Target className={`h-4 w-4 ${
+              retention >= 0.9 ? "text-green-500" : retention >= 0.8 ? "text-yellow-500" : "text-red-500"
+            }`} />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{(retention * 100).toFixed(1)}%</div>
+            <div className={`text-2xl font-bold tabular-nums ${
+              retention >= 0.9 ? "text-green-600" : retention >= 0.8 ? "text-yellow-600" : "text-red-600"
+            }`}>
+              {(retention * 100).toFixed(1)}<span className="text-sm">%</span>
+            </div>
             <p className={`text-xs mt-1 ${
               retention >= 0.9 ? "text-green-600" : retention >= 0.8 ? "text-yellow-600" : "text-red-600"
             }`}>
-              {retention >= 0.9 ? "🎯 优秀！保持即可" : retention >= 0.8 ? "👍 良好，继续努力" : "⚠️ 需加油，建议减少新卡量"}
+              {retention >= 0.9 ? "优秀" : retention >= 0.8 ? "良好" : "需加强复习"}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-1">
-              待复习
-              <span className="relative group">
-                <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/50 cursor-help" />
-                <span className="absolute bottom-full right-0 mb-1 w-52 p-2 rounded-md bg-popover border shadow-lg text-xs text-popover-foreground opacity-0 group-hover:opacity-100 pointer-events-none z-50">
-                  到期复习：已学过、到期需要复习的卡片。新卡：还没学过的卡片。明日到期数会随今天的复习变化。
-                </span>
-              </span>
-            </CardTitle>
+            <CardTitle className="text-sm font-medium">待复习</CardTitle>
             <Calendar className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-primary">{dueCount}</div>
+            <div className="text-2xl font-bold tabular-nums text-primary">
+              {dueCount}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">
-              到期 {dueReviewCount} + 新卡 {newAvailableCount}
+              {dueReviewCount > 0 && <span>到期 {dueReviewCount}</span>}
+              {dueReviewCount > 0 && newAvailableCount > 0 && <span> · </span>}
+              {newAvailableCount > 0 && <span>新卡 {newAvailableCount}</span>}
+              {dueReviewCount === 0 && newAvailableCount === 0 && <span>已全部完成 🎉</span>}
+              {tomorrowDue > 0 && <span className="ml-1 text-muted-foreground/70">· 明日 {tomorrowDue}</span>}
             </p>
-            {tomorrowDue > 0 && (
-              <p className="text-xs text-muted-foreground">
-                明日到期 {tomorrowDue} 张
-              </p>
-            )}
           </CardContent>
         </Card>
       </div>

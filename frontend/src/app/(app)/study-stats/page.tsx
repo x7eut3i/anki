@@ -31,9 +31,9 @@ function StatCard({ icon: Icon, label, value, sub, color, tooltip }: {
 }) {
   return (
     <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-center justify-between">
-          <div>
+      <CardContent className="pt-6 pb-5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
             <p className="text-sm text-muted-foreground flex items-center gap-1">
               {label}
               {tooltip && (
@@ -45,10 +45,12 @@ function StatCard({ icon: Icon, label, value, sub, color, tooltip }: {
                 </span>
               )}
             </p>
-            <p className={`text-2xl font-bold ${color || ""}`}>{value}</p>
-            {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
+            <p className={`text-2xl font-bold tabular-nums mt-1 ${color || ""}`}>{value}</p>
+            {sub && <p className="text-xs text-muted-foreground mt-1 truncate">{sub}</p>}
           </div>
-          <Icon className={`h-8 w-8 ${color || "text-muted-foreground"} opacity-50`} />
+          <div className="shrink-0 mt-0.5">
+            <Icon className={`h-5 w-5 ${color || "text-muted-foreground"} opacity-50`} />
+          </div>
         </div>
       </CardContent>
     </Card>
