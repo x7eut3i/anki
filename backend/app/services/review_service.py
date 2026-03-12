@@ -1,6 +1,7 @@
 """Review service: handles card reviews, due card queries, and study stats."""
 
 import json
+import random
 from datetime import datetime, timezone, timedelta
 
 from sqlmodel import Session, select, func, col, text
@@ -130,6 +131,7 @@ class ReviewService:
                 return {"cards": [], "total_due": 0, "new_count": 0, "review_count": 0, "relearning_count": 0}
 
         # Priority: Relearning > Learning > New > Review
+        # Within each priority group: due cards by due date, new cards randomly
         query = query.order_by(
             text("""
                 CASE
@@ -138,6 +140,13 @@ class ReviewService:
                     WHEN user_card_progress.state = 1 THEN 1
                     WHEN user_card_progress.state = 0 THEN 2
                     WHEN user_card_progress.state = 2 THEN 3
+                END
+            """),
+            # For cards with progress, sort by due date; for new cards (NULL), randomize
+            text("""
+                CASE
+                    WHEN user_card_progress.id IS NULL THEN ABS(RANDOM()) % 1000000
+                    ELSE 0
                 END
             """),
             text("COALESCE(user_card_progress.due, '1970-01-01')"),
@@ -362,6 +371,9 @@ class ReviewService:
             limit=card_limit,
         )
         card_ids = [c["id"] for c in due_result["cards"]]
+
+        # Shuffle cards for the session so the presentation order is random
+        random.shuffle(card_ids)
 
         session_obj = StudySession(
             user_id=self.user_id,
