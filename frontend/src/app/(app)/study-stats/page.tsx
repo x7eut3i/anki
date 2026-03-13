@@ -221,7 +221,7 @@ export default function StudyStatsPage() {
       </div>
 
       {/* Overview cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard
           icon={BarChart3}
           label="总复习次数"
@@ -252,6 +252,14 @@ export default function StudyStatsPage() {
           sub={`平均 ${summary.avg_session_cards} 卡/次`}
           color="text-blue-500"
           tooltip="选定时间段内总学习时长，以及每次学习平均复习的卡片数量。"
+        />
+        <StatCard
+          icon={BookOpen}
+          label="精读时间"
+          value={`${summary.total_reading_time_ms >= 3600000 ? `${Math.floor(summary.total_reading_time_ms / 3600000)}时${Math.round((summary.total_reading_time_ms % 3600000) / 60000)}分` : `${Math.round(summary.total_reading_time_ms / 60000)}分`}`}
+          sub={summary.total_articles_read > 0 ? `已读 ${summary.total_articles_read} 篇文章` : undefined}
+          color="text-purple-500"
+          tooltip="在精读页面阅读文章的累计时间，以及阅读过的文章数量。"
         />
       </div>
 

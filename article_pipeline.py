@@ -79,7 +79,7 @@ SOURCES = {
 
 # System prompt is imported from the shared module for consistency
 # and AI-provider cache optimization (same system prompt = cache hit)
-from app.services.prompts import CARD_SYSTEM_PROMPT, make_pipeline_user_prompt
+from app.services.prompts import CARD_SYSTEM_PROMPT, make_pipeline_user_prompt, get_date_prefix
 from app.services.prompts import (
     ARTICLE_ANALYSIS_SYSTEM_PROMPT,
     make_article_analysis_prompt,
@@ -537,10 +537,11 @@ class ArticlePipeline:
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/json",
                 }
+                date_prefix = get_date_prefix("Asia/Shanghai")
                 payload = {
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": get_prompt(session, "card_system", CARD_SYSTEM_PROMPT)},
+                        {"role": "system", "content": date_prefix + "\n" + get_prompt(session, "card_system", CARD_SYSTEM_PROMPT)},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.3,
@@ -631,10 +632,11 @@ class ArticlePipeline:
                     "Authorization": f"Bearer {config.api_key}",
                     "Content-Type": "application/json",
                 }
+                date_prefix = get_date_prefix("Asia/Shanghai")
                 payload = {
                     "model": model,
                     "messages": [
-                        {"role": "system", "content": get_prompt(session, "article_analysis", ARTICLE_ANALYSIS_SYSTEM_PROMPT)},
+                        {"role": "system", "content": date_prefix + "\n" + get_prompt(session, "article_analysis", ARTICLE_ANALYSIS_SYSTEM_PROMPT)},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.3,

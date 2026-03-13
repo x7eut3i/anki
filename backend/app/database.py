@@ -104,6 +104,7 @@ def _migrate_add_columns():
         ("study_sessions", "quiz_answer_map", "TEXT DEFAULT '{}'"),
         ("article_analyses", "last_read_at", "TIMESTAMP"),
         ("article_analyses", "error_state", "INTEGER DEFAULT 0"),
+        ("article_analyses", "reading_time_ms", "INTEGER DEFAULT 0"),
         ("ai_configs", "ai_timeout", "INTEGER DEFAULT 300"),
         ("ai_configs", "import_concurrency", "INTEGER DEFAULT 3"),
     ]

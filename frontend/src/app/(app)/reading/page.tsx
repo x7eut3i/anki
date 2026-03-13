@@ -46,6 +46,17 @@ import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/timezone";
 import { CardDetailPanel, CardTagManager, isHiddenTag } from "@/components/card-detail";
 
+/* ── Format reading time from milliseconds ── */
+function formatReadingTime(ms: number): string {
+  if (!ms || ms < 1000) return "";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}小时${m > 0 ? m + "分" : ""}`;
+  if (m > 0) return `${m}分钟`;
+  return `${totalSec}秒`;
+}
+
 /* ── Clean excess blank lines while preserving paragraph spacing ── */
 function cleanContent(text: string): string {
   // Normalize line endings
@@ -71,6 +82,7 @@ interface AnalysisItem {
   is_starred: boolean;
   created_at: string;
   updated_at: string;
+  reading_time_ms?: number;
   tags_list?: { id: number; name: string; color: string }[];
   card_count?: number;
   error_state?: number;
@@ -163,17 +175,15 @@ function QualityBadge({ score }: { score: number }) {
 function AnnotatedText({
   content,
   highlights,
-  containerRef,
 }: {
   content: string;
   highlights: Highlight[];
-  containerRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const [activePopup, setActivePopup] = useState<number | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const clickYRef = useRef<number>(0);
 
-  // Reposition popup: horizontally centered on article content, vertically above the clicked line
+  // Reposition popup: horizontally centered, vertically above the clicked line
   useEffect(() => {
     if (activePopup === null || !popupRef.current) return;
     const el = popupRef.current;
@@ -181,23 +191,13 @@ function AnnotatedText({
     const vw = window.innerWidth;
 
     el.style.position = "fixed";
+    el.style.left = "50%";
+    el.style.transform = "translateX(-50%)";
     el.style.right = "auto";
-    const popupWidth = Math.min(360, vw - 32);
-    el.style.width = `${popupWidth}px`;
+    el.style.width = `${Math.min(360, vw - 32)}px`;
     el.style.maxHeight = `${Math.min(vh * 0.6, 400)}px`;
     el.style.overflowY = "auto";
     el.style.zIndex = "9999";
-
-    // Horizontal centering: use article container width if available
-    if (containerRef?.current) {
-      const cRect = containerRef.current.getBoundingClientRect();
-      const centerX = cRect.left + cRect.width / 2;
-      el.style.left = `${centerX - popupWidth / 2}px`;
-      el.style.transform = "none";
-    } else {
-      el.style.left = "50%";
-      el.style.transform = "translateX(-50%)";
-    }
 
     // Position above the clicked line
     const rect = el.getBoundingClientRect();
@@ -1014,9 +1014,6 @@ export default function ReadingPage() {
   const [categoryList, setCategoryList] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
 
-  // Content container ref (for popup centering)
-  const contentContainerRef = useRef<HTMLDivElement>(null);
-
   // Related cards from this article
   const [relatedCards, setRelatedCards] = useState<any[]>([]);
   const [showRelatedCards, setShowRelatedCards] = useState(true);
@@ -1033,6 +1030,90 @@ export default function ReadingPage() {
   const [articleTags, setArticleTags] = useState<any[]>([]);
   const [allTags, setAllTags] = useState<any[]>([]);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
+
+  // Reading time tracking
+  const readingTimeRef = useRef<{ startTime: number; accumulated: number; articleId: number | null; idle: boolean }>({ startTime: 0, accumulated: 0, articleId: null, idle: false });
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const IDLE_TIMEOUT = 60_000; // 60s of no interaction → pause timer
+
+  const markActive = useCallback(() => {
+    const rt = readingTimeRef.current;
+    if (!rt.articleId) return;
+    // Resume timer if we were idle
+    if (rt.idle) {
+      rt.idle = false;
+      rt.startTime = Date.now();
+    }
+    // Reset idle countdown
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      const rt2 = readingTimeRef.current;
+      if (rt2.startTime > 0 && !rt2.idle) {
+        rt2.accumulated += Date.now() - rt2.startTime;
+        rt2.startTime = 0;
+        rt2.idle = true;
+      }
+    }, IDLE_TIMEOUT);
+  }, []);
+
+  // Flush accumulated reading time to backend
+  const flushReadingTime = useCallback(async () => {
+    const rt = readingTimeRef.current;
+    if (!token || !rt.articleId) return;
+    const now = Date.now();
+    const elapsed = (rt.startTime > 0 && !rt.idle) ? now - rt.startTime : 0;
+    const total = rt.accumulated + elapsed;
+    if (total < 3000) return; // ignore < 3s
+    const capped = Math.min(total, 10 * 60 * 1000); // cap at 10min per flush
+    rt.accumulated = 0;
+    if (!rt.idle) rt.startTime = now;
+    try {
+      await reading.updateReadingTime(rt.articleId, capped, token);
+    } catch { /* ignore */ }
+  }, [token]);
+
+  // Start/stop reading timer when detail opens/closes
+  useEffect(() => {
+    if (detail) {
+      readingTimeRef.current = { startTime: Date.now(), accumulated: 0, articleId: detail.id, idle: false };
+      markActive(); // start idle countdown
+      // Flush every 30 seconds while reading
+      const interval = setInterval(() => { flushReadingTime(); }, 30000);
+      // Pause when tab hidden, resume when visible
+      const handleVisibility = () => {
+        const rt = readingTimeRef.current;
+        if (document.hidden) {
+          if (rt.startTime > 0 && !rt.idle) {
+            rt.accumulated += Date.now() - rt.startTime;
+            rt.startTime = 0;
+          }
+        } else {
+          if (!rt.idle) rt.startTime = Date.now();
+          markActive();
+        }
+      };
+      // Detect user interaction to reset idle timer
+      const onInteraction = () => markActive();
+      document.addEventListener("visibilitychange", handleVisibility);
+      document.addEventListener("mousemove", onInteraction);
+      document.addEventListener("scroll", onInteraction, true);
+      document.addEventListener("keydown", onInteraction);
+      document.addEventListener("touchstart", onInteraction);
+      return () => {
+        clearInterval(interval);
+        if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+        document.removeEventListener("visibilitychange", handleVisibility);
+        document.removeEventListener("mousemove", onInteraction);
+        document.removeEventListener("scroll", onInteraction, true);
+        document.removeEventListener("keydown", onInteraction);
+        document.removeEventListener("touchstart", onInteraction);
+        // Flush on unmount / detail close
+        flushReadingTime();
+        readingTimeRef.current = { startTime: 0, accumulated: 0, articleId: null, idle: false };
+      };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.id]);
 
   // Scroll-to-top for detail view
   const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -1420,6 +1501,9 @@ export default function ReadingPage() {
                     <span className="text-xs text-muted-foreground">— {detail.quality_reason}</span>
                   )}
                   <span className="text-xs">{detail.word_count} 字</span>
+                  {(detail.reading_time_ms ?? 0) > 0 && (
+                    <span className="text-xs text-muted-foreground">📖 已读 {formatReadingTime(detail.reading_time_ms!)}</span>
+                  )}
                 </div>
                 {(detail.error_state ?? 0) > 0 && (
                   <div className="flex flex-wrap items-center gap-2 mt-1.5">
@@ -1644,10 +1728,10 @@ export default function ReadingPage() {
             )}
 
             {/* Content */}
-            <div ref={contentContainerRef} className="bg-card rounded-xl border p-6" onMouseUp={handleTextSelect}>
+            <div className="bg-card rounded-xl border p-6" onMouseUp={handleTextSelect}>
               {activeTab === "annotated" ? (
                 highlights.length > 0 ? (
-                  <AnnotatedText content={cleanContent(detail.content)} highlights={highlights} containerRef={contentContainerRef} />
+                  <AnnotatedText content={cleanContent(detail.content)} highlights={highlights} />
                 ) : (
                   <div className="prose prose-sm max-w-none leading-[1.9] text-[15px] reading-content">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanContent(detail.content)}</ReactMarkdown>
@@ -2227,15 +2311,15 @@ export default function ReadingPage() {
                       </span>
                       <QualityBadge score={item.quality_score} />
                       {item.source_name && <span>{item.source_name}</span>}
-                      {item.publish_date && <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">发布 {formatDateTime(item.publish_date, { dateOnly: true })}</span>}
+                      {item.publish_date && <span>{formatDateTime(item.publish_date, { dateOnly: true })}</span>}
                       <span>{item.word_count} 字</span>
                       {(item.card_count ?? 0) > 0 && (
                         <span className="text-primary">🃏 {item.card_count} 张卡片</span>
                       )}
-                      <span className="bg-gray-50 dark:bg-gray-800/40 text-gray-600 dark:text-gray-400 px-1.5 py-0.5 rounded">收录 {formatDateTime(item.created_at, { dateOnly: true })}</span>
+                      <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
                     </div>
                     {(item.error_state ?? 0) > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-1.5 border-t border-dashed border-muted-foreground/20">
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         {errorStateBadges(item.error_state!).map((b, i) => (
                           <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
                             ⚠ {b.label}

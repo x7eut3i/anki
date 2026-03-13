@@ -5,6 +5,16 @@ import { Badge } from "@/components/ui/badge";
 import { ExternalLink } from "lucide-react";
 import { formatDateTime } from "@/lib/timezone";
 
+function formatReadingTimeShort(ms: number): string {
+  if (!ms || ms < 1000) return "";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}h${m > 0 ? m + "m" : ""}`;
+  if (m > 0) return `${m}分钟`;
+  return `${totalSec}秒`;
+}
+
 export interface ArticleItemData {
   id: number;
   title: string;
@@ -16,6 +26,7 @@ export interface ArticleItemData {
   created_at?: string;
   status?: string;
   is_starred?: boolean;
+  reading_time_ms?: number;
   tags_list?: { id: number; name: string; color: string }[];
 }
 
@@ -49,7 +60,6 @@ export function ArticleListItem({
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {article.source_name && <span>{article.source_name}</span>}
-            {article.publish_date && <span>{article.publish_date}</span>}
             {article.word_count != null && article.word_count > 0 && (
               <span>{article.word_count}字</span>
             )}
@@ -58,8 +68,14 @@ export function ArticleListItem({
                 ⭐ {article.quality_score}
               </span>
             )}
+            {(article.reading_time_ms ?? 0) > 0 && (
+              <span className="text-muted-foreground">📖 {formatReadingTimeShort(article.reading_time_ms!)}</span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground mt-0.5">
+            {article.publish_date && <span>发布 {article.publish_date}</span>}
             {article.created_at && (
-              <span>{formatDateTime(article.created_at, { dateOnly: true })}</span>
+              <span>收录 {formatDateTime(article.created_at, { dateOnly: true })}</span>
             )}
           </div>
           {/* Tags */}

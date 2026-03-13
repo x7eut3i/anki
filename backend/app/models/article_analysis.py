@@ -48,6 +48,9 @@ class ArticleAnalysis(SQLModel, table=True):
     # Error state — bit flags (0 = no errors)
     error_state: int = Field(default=0)  # ArticleErrorState flags
 
+    # Reading time tracking (cumulative milliseconds)
+    reading_time_ms: int = Field(default=0)
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

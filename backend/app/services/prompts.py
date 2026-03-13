@@ -6,6 +6,22 @@ Design principles:
 3. Per-topic card format templates ensure each exam topic gets optimal card design
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# ── Date context helper ──
+
+def get_date_prefix(timezone_str: str = "Asia/Shanghai") -> str:
+    """Return a date context string for AI prompts, e.g. '【当前日期：2026年3月13日，星期五】'."""
+    try:
+        tz = ZoneInfo(timezone_str)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz)
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    return f"【当前日期：{now.year}年{now.month}月{now.day}日，{weekdays[now.weekday()]}】"
+
+
 # ── Available categories list (injected at runtime) ──
 # Use get_category_list(session) to get the actual list from DB
 

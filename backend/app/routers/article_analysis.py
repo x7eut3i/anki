@@ -175,6 +175,7 @@ def list_analyses(
             "created_at": item.created_at.isoformat(),
             "updated_at": item.updated_at.isoformat(),
             "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
+            "reading_time_ms": item.reading_time_ms or 0,
             "tags_list": article_tag_map.get(item.id, []),
             "card_count": card_count_map.get(item.source_url, 0),
             "error_state": item.error_state or 0,
@@ -300,6 +301,7 @@ def get_analysis(
         "updated_at": item.updated_at.isoformat(),
         "finished_at": item.finished_at.isoformat() if item.finished_at else None,
         "last_read_at": item.last_read_at.isoformat() if item.last_read_at else None,
+        "reading_time_ms": item.reading_time_ms or 0,
         "error_state": item.error_state or 0,
     }
 
@@ -451,6 +453,35 @@ def update_star(
     session.add(item)
     session.commit()
     return {"ok": True}
+
+
+class ReadingTimeUpdate(BaseModel):
+    duration_ms: int
+
+
+@router.put("/{analysis_id}/reading-time")
+def update_reading_time(
+    analysis_id: int,
+    data: ReadingTimeUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Increment cumulative reading time for an article."""
+    from datetime import datetime, timezone
+
+    if data.duration_ms <= 0:
+        return {"ok": True}
+
+    item = session.get(ArticleAnalysis, analysis_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    item.reading_time_ms = (item.reading_time_ms or 0) + data.duration_ms
+    item.last_read_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.now(timezone.utc)
+    session.add(item)
+    session.commit()
+    return {"ok": True, "reading_time_ms": item.reading_time_ms}
 
 
 @router.delete("/{analysis_id}", status_code=204)

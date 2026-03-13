@@ -509,6 +509,19 @@ def get_study_stats(
     ).one()
     cards_by_state["unseen"] = max(0, total_cards - cards_with_progress)
 
+    # Total reading time across all articles for this user
+    total_reading_time_ms = session.exec(
+        select(func.coalesce(func.sum(ArticleAnalysis.reading_time_ms), 0)).where(
+            ArticleAnalysis.user_id == current_user.id,
+        )
+    ).one()
+    total_articles_read = session.exec(
+        select(func.count()).where(
+            ArticleAnalysis.user_id == current_user.id,
+            ArticleAnalysis.reading_time_ms > 0,
+        )
+    ).one()
+
     return {
         "summary": {
             "total_reviews": total_reviews,
@@ -517,6 +530,8 @@ def get_study_stats(
             "streak_days": streak,
             "total_sessions": total_sessions,
             "avg_session_cards": round(avg_session_cards, 1),
+            "total_reading_time_ms": total_reading_time_ms,
+            "total_articles_read": total_articles_read,
             "rating_distribution": {
                 "again": again_count, "hard": hard_count,
                 "good": good_count, "easy": easy_count,

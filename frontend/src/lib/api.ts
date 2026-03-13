@@ -425,6 +425,13 @@ export const reading = {
       token,
     }),
 
+  updateReadingTime: (id: number, duration_ms: number, token: string) =>
+    request<any>(`/api/reading/${id}/reading-time`, {
+      method: "PUT",
+      body: JSON.stringify({ duration_ms }),
+      token,
+    }),
+
   delete: (id: number, token: string, deleteCards?: boolean) =>
     request<void>(`/api/reading/${id}${deleteCards ? '?delete_cards=true' : ''}`, { method: "DELETE", token }),
 

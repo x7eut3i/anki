@@ -126,6 +126,20 @@ class AIService:
         if self._get_today_usage() >= cfg.max_daily_calls:
             raise ValueError("Daily AI call limit reached")
 
+        # Inject current date into the first system message
+        from app.services.prompts import get_date_prefix
+        try:
+            from app.models.user import User
+            user = self.session.get(User, self.user_id)
+            tz_str = user.timezone if user else "Asia/Shanghai"
+        except Exception:
+            tz_str = "Asia/Shanghai"
+        date_prefix = get_date_prefix(tz_str)
+        for msg in messages:
+            if msg.get("role") == "system":
+                msg["content"] = date_prefix + "\n" + msg["content"]
+                break
+
         # Use config values if not explicitly specified
         if max_tokens is None:
             max_tokens = getattr(cfg, "max_tokens", 8192) or 8192
