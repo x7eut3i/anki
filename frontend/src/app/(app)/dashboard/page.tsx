@@ -16,6 +16,7 @@ import {
   ClipboardCheck,
   PlayCircle,
 } from "lucide-react";
+import { ArticleListItem } from "@/components/article-list-item";
 
 export default function DashboardPage() {
   const { token, user } = useAuthStore();
@@ -187,46 +188,13 @@ export default function DashboardPage() {
 
       {/* Daily recommendation */}
       {recommendation && (
-        <Card
-          className="bg-card border hover:shadow-sm transition-shadow cursor-pointer"
-          onClick={() => window.location.href = `/reading?article_id=${recommendation.id}`}
-        >
-          <CardContent className="py-4">
-            <div className="flex items-start gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs text-muted-foreground">📖 今日推荐精读</span>
-                </div>
-                <h3 className="font-medium text-sm truncate">{recommendation.title}</h3>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
-                  {recommendation.status && (
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${
-                      recommendation.status === "reading" ? "bg-amber-100 text-amber-700" :
-                      recommendation.status === "archived" ? "bg-gray-100 text-gray-500" :
-                      "bg-blue-100 text-blue-700"
-                    }`}>
-                      {recommendation.status === "reading" ? "📖 在读" :
-                       recommendation.status === "archived" ? "📦 归档" : "✨ 新"}
-                    </span>
-                  )}
-                  {recommendation.quality_score > 0 && (
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                      recommendation.quality_score >= 9 ? "bg-red-100 text-red-700" :
-                      recommendation.quality_score >= 7 ? "bg-orange-100 text-orange-700" :
-                      recommendation.quality_score >= 5 ? "bg-blue-100 text-blue-700" :
-                      "bg-gray-100 text-gray-600"
-                    }`}>
-                      ⭐ {recommendation.quality_score}/10
-                    </span>
-                  )}
-                  {recommendation.source_name && <span>{recommendation.source_name}</span>}
-                  {recommendation.publish_date && <span>{recommendation.publish_date}</span>}
-                  {recommendation.word_count > 0 && <span>{recommendation.word_count} 字</span>}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1.5 px-1">📖 今日推荐精读</div>
+          <ArticleListItem
+            article={recommendation}
+            onClick={() => window.location.href = `/reading?article_id=${recommendation.id}`}
+          />
+        </div>
       )}
 
       {/* Stats cards */}

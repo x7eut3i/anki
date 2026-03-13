@@ -114,6 +114,8 @@ def list_analyses(
         sort_column = col(ArticleAnalysis.word_count)
     elif sort_by == "last_read_at":
         sort_column = col(ArticleAnalysis.last_read_at)
+    elif sort_by == "reading_time_ms":
+        sort_column = col(ArticleAnalysis.reading_time_ms)
 
     if sort_dir == "asc":
         query = query.order_by(sort_column.asc())
@@ -199,11 +201,11 @@ def daily_recommendation(
 
     for min_score in (8.5, 7.5, 0):
         query = (
-            select(ArticleAnalysis.id, ArticleAnalysis.title,
-                   ArticleAnalysis.source_name, ArticleAnalysis.quality_score,
-                   ArticleAnalysis.word_count, ArticleAnalysis.publish_date,
-                   ArticleAnalysis.status)
-            .where(ArticleAnalysis.status != "archived")
+            select(ArticleAnalysis)
+            .where(
+                ArticleAnalysis.user_id == current_user.id,
+                ArticleAnalysis.status != "archived",
+            )
         )
         if min_score > 0:
             query = query.where(ArticleAnalysis.quality_score >= min_score)
@@ -216,14 +218,32 @@ def daily_recommendation(
 
     seed = int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16)
     pick = articles[seed % len(articles)]
+
+    # Count cards linked to this article
+    card_count = 0
+    try:
+        from app.models.card import Card
+        card_count = session.exec(
+            select(func.count()).select_from(Card).where(
+                Card.source_article_id == pick.id
+            )
+        ).one()
+    except Exception:
+        pass
+
     return {
-        "id": pick[0],
-        "title": pick[1],
-        "source_name": pick[2],
-        "quality_score": pick[3],
-        "word_count": pick[4],
-        "publish_date": pick[5],
-        "status": pick[6],
+        "id": pick.id,
+        "title": pick.title,
+        "source_name": pick.source_name or "",
+        "source_url": pick.source_url or "",
+        "quality_score": pick.quality_score,
+        "word_count": pick.word_count,
+        "publish_date": pick.publish_date or "",
+        "status": pick.status,
+        "created_at": pick.created_at.isoformat() if pick.created_at else None,
+        "reading_time_ms": pick.reading_time_ms or 0,
+        "error_state": pick.error_state or 0,
+        "card_count": card_count,
     }
 
 

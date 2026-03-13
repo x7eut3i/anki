@@ -45,6 +45,7 @@ import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import { formatDateTime } from "@/lib/timezone";
 import { CardDetailPanel, CardTagManager, isHiddenTag } from "@/components/card-detail";
+import { ArticleListItem } from "@/components/article-list-item";
 
 /* ── Format reading time from milliseconds ── */
 function formatReadingTime(ms: number): string {
@@ -2113,6 +2114,7 @@ export default function ReadingPage() {
               <option value="quality_score">质量评分</option>
               <option value="word_count">字数</option>
               <option value="last_read_at">最近阅读</option>
+              <option value="reading_time_ms">阅读时间</option>
             </select>
             <button
               className="h-8 w-8 flex items-center justify-center rounded-md border bg-background hover:bg-muted transition-colors"
@@ -2276,111 +2278,54 @@ export default function ReadingPage() {
               )}
             </div>
           )}
-          {items.map((item) => {
-            const sl = STATUS_LABELS[item.status] || STATUS_LABELS.new;
-            return (
-              <div
-                key={item.id}
-                className="bg-card rounded-lg border p-4 hover:shadow-sm transition-shadow cursor-pointer group"
-                onClick={() => openDetail(item.id)}
-              >
-                <div className="flex items-start gap-3">
-                  <label className="flex items-center mt-1" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      className="rounded"
-                      checked={selectedIds.has(item.id)}
-                      onChange={(e) => {
-                        const next = new Set(selectedIds);
-                        if (e.target.checked) next.add(item.id);
-                        else next.delete(item.id);
-                        setSelectedIds(next);
-                      }}
-                    />
-                  </label>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-medium text-sm truncate">{item.title}</h3>
-                      {item.is_starred && (
-                        <Star className="h-3.5 w-3.5 fill-yellow-400 text-yellow-400 flex-shrink-0" />
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${sl.color}`}>
-                        {sl.icon} {sl.text}
-                      </span>
-                      <QualityBadge score={item.quality_score} />
-                      {item.source_name && <span>{item.source_name}</span>}
-                      {item.publish_date && <span>{formatDateTime(item.publish_date, { dateOnly: true })}</span>}
-                      <span>{item.word_count} 字</span>
-                      {(item.card_count ?? 0) > 0 && (
-                        <span className="text-primary">🃏 {item.card_count} 张卡片</span>
-                      )}
-                      <span>{formatDateTime(item.created_at, { dateOnly: true })}</span>
-                    </div>
-                    {(item.error_state ?? 0) > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                        {errorStateBadges(item.error_state!).map((b, i) => (
-                          <span key={i} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${b.color}`}>
-                            ⚠ {b.label}
-                          </span>
-                        ))}
-                      </div>
+          {items.map((item) => (
+            <ArticleListItem
+              key={item.id}
+              article={item}
+              onClick={() => openDetail(item.id)}
+              leftSlot={
+                <label className="flex items-center mt-1" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={selectedIds.has(item.id)}
+                    onChange={(e) => {
+                      const next = new Set(selectedIds);
+                      if (e.target.checked) next.add(item.id);
+                      else next.delete(item.id);
+                      setSelectedIds(next);
+                    }}
+                  />
+                </label>
+              }
+              rightSlot={
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8"
+                    onClick={(e) => { e.stopPropagation(); toggleStar(item.id, item.is_starred); }}
+                    title={item.is_starred ? "取消收藏" : "收藏"}
+                  >
+                    {item.is_starred ? (
+                      <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                    ) : (
+                      <StarOff className="h-4 w-4" />
                     )}
-                    {/* Article tags */}
-                    {item.tags_list && item.tags_list.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1 mt-1.5">
-                        {item.tags_list.map((tag) => (
-                          <Badge
-                            key={tag.id}
-                            className="text-[10px] px-1.5 py-0"
-                            style={{ backgroundColor: tag.color || '#6366f1', color: '#fff' }}
-                          >
-                            {tag.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {item.source_url && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8"
-                        onClick={(e) => { e.stopPropagation(); window.open(item.source_url, "_blank"); }}
-                        title="打开原文链接"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                    )}
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8"
-                      onClick={(e) => { e.stopPropagation(); toggleStar(item.id, item.is_starred); }}
-                      title={item.is_starred ? "取消收藏" : "收藏"}
-                    >
-                      {item.is_starred ? (
-                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                      ) : (
-                        <StarOff className="h-4 w-4" />
-                      )}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8 text-destructive"
-                      onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                      title="删除文章"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-destructive"
+                    onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                    title="删除文章"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
-              </div>
-            );
-          })}
+              }
+            />
+          ))}
         </div>
       )}
 
