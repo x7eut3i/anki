@@ -74,7 +74,7 @@ def take_snapshot() -> dict:
 def _by_module(stats, top_n: int = 30) -> list[dict]:
     """Aggregate tracemalloc stats by filename, sorted by size desc."""
     return [
-        {"file": s.key, "size_kb": round(s.size / 1024, 1), "count": s.count}
+        {"file": str(s.traceback), "size_kb": round(s.size / 1024, 1), "count": s.count}
         for s in stats[:top_n]
     ]
 
