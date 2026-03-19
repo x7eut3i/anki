@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
+from app.auth import get_current_user
 from app.database import create_db_and_tables, get_session
 from app.models.category import Category, DEFAULT_CATEGORIES
 from app.models.deck import Deck
@@ -423,6 +424,10 @@ async def lifespan(app: FastAPI):
     from app.services.scheduler import setup_scheduler, shutdown_scheduler
     await setup_scheduler()
 
+    # Memory diagnostics (opt-in via MEMORY_DIAG=1)
+    from app.services import mem_diag
+    mem_diag.init()
+
     logger.info("✅ Startup complete")
     yield
     # Shutdown
@@ -477,6 +482,54 @@ app.include_router(study_presets_router.router)
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/api/debug/memory")
+def debug_memory(current_user: User = Depends(get_current_user)):
+    """Memory diagnostics snapshot (requires MEMORY_DIAG=1 env var)."""
+    from app.services import mem_diag
+    return mem_diag.take_snapshot()
+
+
+@app.get("/debug-memory")
+def debug_memory_page():
+    """Standalone HTML page that fetches /api/debug/memory with the stored JWT."""
+    return Response(content=_DEBUG_MEMORY_HTML, media_type="text/html")
+
+
+_DEBUG_MEMORY_HTML = """\
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Diagnostics</title>
+<style>
+  body{font-family:monospace;margin:2em;background:#1a1a2e;color:#e0e0e0}
+  h1{color:#e94560} pre{white-space:pre-wrap;word-break:break-all;background:#16213e;padding:1em;border-radius:6px;max-height:80vh;overflow-y:auto}
+  .err{color:#e94560}
+</style>
+</head>
+<body>
+<h1>Memory Diagnostics</h1>
+<pre id="o">Loading...</pre>
+<script>
+(async()=>{
+  const o=document.getElementById('o');
+  try{
+    const raw=localStorage.getItem('anki-auth');
+    if(!raw){o.innerHTML='<span class="err">Not logged in. Open the app and log in first.</span>';return}
+    const token=JSON.parse(raw)?.state?.token;
+    if(!token){o.innerHTML='<span class="err">No token in auth store.</span>';return}
+    const r=await fetch('/api/debug/memory',{headers:{'Authorization':'Bearer '+token}});
+    if(!r.ok){o.innerHTML='<span class="err">HTTP '+r.status+': '+(await r.text())+'</span>';return}
+    o.textContent=JSON.stringify(await r.json(),null,2);
+  }catch(e){o.innerHTML='<span class="err">'+e.message+'</span>'}
+})();
+</script>
+</body>
+</html>
+"""
 
 
 # ---------------------------------------------------------------------------
