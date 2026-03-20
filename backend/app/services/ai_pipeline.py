@@ -661,12 +661,12 @@ async def ai_generate_cards(
 
     # Create cards with dedup
     imported = 0
+    dedup_svc = DedupService(session, user_id)
     for card_data in cards_data:
         front_text = card_data.get("front", "")
         if not front_text:
             continue
 
-        dedup_svc = DedupService(session, user_id)
         cat_name = card_data.get("category", "时政热点")
         category = cat_map.get(cat_name) or next(iter(cat_map.values()), None)
 

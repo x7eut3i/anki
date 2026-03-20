@@ -22,6 +22,31 @@ class DedupService:
     def __init__(self, session: Session, user_id: int | None = None):
         self.session = session
         self.user_id = user_id  # kept for API compat but no longer used for filtering
+        # Lazily-built indexes
+        self._by_cat: dict[tuple[int | None, str], Card] | None = None  # (category_id, norm) → Card
+        self._by_front: dict[str, Card] | None = None  # norm → Card (any category)
+
+    def _ensure_index(self):
+        """Build (or return cached) normalized-front index."""
+        if self._by_cat is not None:
+            return
+        query = select(Card)
+        existing = self.session.exec(query).all()
+        by_cat: dict[tuple[int | None, str], Card] = {}
+        by_front: dict[str, Card] = {}
+        for card in existing:
+            norm = normalize_text(card.front)
+            by_cat[(card.category_id, norm)] = card
+            by_front[norm] = card
+        self._by_cat = by_cat
+        self._by_front = by_front
+
+    def _lookup(self, norm: str, category_id: int | None) -> Card | None:
+        """Look up by (category_id, norm) if category given, else by norm only."""
+        self._ensure_index()
+        if category_id is not None:
+            return self._by_cat.get((category_id, norm))
+        return self._by_front.get(norm)
 
     def check_duplicates(
         self,
@@ -33,21 +58,12 @@ class DedupService:
 
         Returns a list of dicts: {front, is_duplicate, existing_card_id, existing_front}
         """
-        # Build index of existing cards (shared — no user_id filter)
-        query = select(Card)
-        if category_id:
-            query = query.where(Card.category_id == category_id)
-        existing = self.session.exec(query).all()
-
-        existing_index: dict[str, Card] = {}
-        for card in existing:
-            key = normalize_text(card.front)
-            existing_index[key] = card
+        idx = self._ensure_index()
 
         results = []
         for front in front_texts:
             norm = normalize_text(front)
-            existing_card = existing_index.get(norm)
+            existing_card = self._lookup(norm, category_id)
             if existing_card:
                 results.append({
                     "front": front,
@@ -76,14 +92,7 @@ class DedupService:
         if not norm:
             return None
 
-        query = select(Card)
-        if category_id:
-            query = query.where(Card.category_id == category_id)
-
-        candidates = self.session.exec(query).all()
-        for card in candidates:
-            if exclude_card_id and card.id == exclude_card_id:
-                continue
-            if normalize_text(card.front) == norm:
-                return card
-        return None
+        card = self._lookup(norm, category_id)
+        if card and exclude_card_id and card.id == exclude_card_id:
+            return None
+        return card

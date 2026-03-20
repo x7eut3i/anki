@@ -20,6 +20,23 @@ logger = logging.getLogger("anki.ingestion")
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
 
+
+def _release_pipeline_memory():
+    """Force garbage collection and return freed memory to the OS."""
+    import gc
+    import linecache
+    linecache.clearcache()
+    gc.collect()
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+        logger.info("🧹 Post-pipeline memory cleanup: gc.collect + malloc_trim done")
+    except (OSError, AttributeError):
+        # Not on Linux (e.g. dev machine) — gc.collect is enough
+        logger.info("🧹 Post-pipeline memory cleanup: gc.collect done")
+
+
 # ── Singleton lock: only one ingestion job at a time ──
 _running_lock = threading.Lock()
 _running_log_id: int | None = None  # ID of the currently-running IngestionLog
@@ -703,6 +720,9 @@ async def _run_pipeline_internal(run_type: str = "manual"):
             except Exception as e:
                 logger.error("Failed to fix stuck ingestion log #%d: %s", log_id_to_fix, e)
 
+        # Release memory back to the OS after the heavy pipeline run
+        _release_pipeline_memory()
+
 
 async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
     """Run RMRB backfill pipeline as a background task.
@@ -1115,6 +1135,8 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
             except Exception as e:
                 logger.error("Failed to fix stuck RMRB log #%d: %s", log_id_to_fix, e)
 
+        _release_pipeline_memory()
+
 
 async def _run_qiushi_backfill_internal(issues: list[dict]):
     """Run 求是杂志 backfill pipeline for one or more issues.
@@ -1525,6 +1547,8 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                         logger.warning("Safety: forced Qiushi backfill log #%d from 'running' to 'error'", log_id_to_fix)
             except Exception as e:
                 logger.error("Failed to fix stuck Qiushi log #%d: %s", log_id_to_fix, e)
+
+        _release_pipeline_memory()
 
 
 @router.post("/run")

@@ -29,4 +29,9 @@ COPY --from=frontend /build/out ./static/
 
 
 EXPOSE 8000
+
+# Limit glibc malloc arenas to reduce memory fragmentation in containers.
+# Default is 8*NCPU; on a single-worker app this wastes hundreds of MB.
+ENV MALLOC_ARENA_MAX=2
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
