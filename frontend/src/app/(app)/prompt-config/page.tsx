@@ -158,26 +158,19 @@ export default function PromptsPage() {
                       {/* Model override */}
                       <div>
                         <label className="text-xs font-medium text-muted-foreground">专用模型（留空使用默认模型）</label>
-                        {models.length > 0 ? (
-                          <select
-                            value={editModel}
-                            onChange={(e) => setEditModel(e.target.value)}
-                            className="w-full h-9 mt-1 px-3 rounded-md border border-input bg-background text-sm"
-                          >
-                            <option value="">使用默认模型</option>
-                            {models.map((m) => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input
-                            type="text"
-                            placeholder="如 gpt-4o, claude-3-sonnet-20240229"
-                            value={editModel}
-                            onChange={(e) => setEditModel(e.target.value)}
-                            className="w-full h-9 mt-1 px-3 rounded-md border border-input bg-background text-sm"
-                          />
-                        )}
+                        <input
+                          type="text"
+                          list="prompt-model-list"
+                          placeholder="如 gpt-4o, claude-3-sonnet-20240229"
+                          value={editModel}
+                          onChange={(e) => setEditModel(e.target.value)}
+                          className="w-full h-9 mt-1 px-3 rounded-md border border-input bg-background text-sm"
+                        />
+                        <datalist id="prompt-model-list">
+                          {models.map((m) => (
+                            <option key={m} value={m} />
+                          ))}
+                        </datalist>
                       </div>
 
                       {/* Content editor */}

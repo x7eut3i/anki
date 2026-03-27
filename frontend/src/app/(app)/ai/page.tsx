@@ -476,23 +476,17 @@ export default function AIPage() {
             <div>
               <label className="text-sm font-medium">模型</label>
               <div className="flex gap-2">
-                {models.length > 0 ? (
-                  <select
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                  >
-                    {models.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <Input
-                    placeholder="deepseek-chat"
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                  />
-                )}
+                <Input
+                  list="model-list"
+                  placeholder="deepseek-chat"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                />
+                <datalist id="model-list">
+                  {models.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
                 <Button
                   variant="outline"
                   size="sm"
@@ -606,24 +600,17 @@ export default function AIPage() {
               <div>
                 <label className="text-sm font-medium">备用模型名称</label>
                 <div className="flex gap-2">
-                  {models.length > 0 ? (
-                    <select
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      value={fallbackModel}
-                      onChange={(e) => setFallbackModel(e.target.value)}
-                    >
-                      <option value="">不使用备用模型</option>
-                      {models.filter((m) => m !== model).map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <Input
-                      placeholder="留空则不使用备用模型"
-                      value={fallbackModel}
-                      onChange={(e) => setFallbackModel(e.target.value)}
-                    />
-                  )}
+                  <Input
+                    list="fallback-model-list"
+                    placeholder="留空则不使用备用模型"
+                    value={fallbackModel}
+                    onChange={(e) => setFallbackModel(e.target.value)}
+                  />
+                  <datalist id="fallback-model-list">
+                    {models.filter((m) => m !== model).map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   当主模型遇到 429（频率限制）或服务器错误时，自动切换到此模型。冷却期结束后恢复主模型。
