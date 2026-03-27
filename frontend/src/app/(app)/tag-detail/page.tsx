@@ -20,6 +20,7 @@ import {
   ArrowUp,
   ArrowDown,
   Search,
+  Pencil,
 } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ import {
 } from "@/components/card-detail";
 import { HighlightText } from "@/components/highlight-text";
 import { ArticleListItem } from "@/components/article-list-item";
+import { CardEditModal } from "@/components/card-edit-modal";
 
 interface TagCard {
   id: number;
@@ -79,6 +81,7 @@ export default function TagDetailPage() {
   // Card expand
   const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set());
   const [expandAll, setExpandAll] = useState(false);
+  const [editingCard, setEditingCard] = useState<any | null>(null);
 
   // Sort, filter, search for cards
   type SortKey = "default" | "front" | "created_at" | "deck_name";
@@ -319,6 +322,18 @@ export default function TagDetailPage() {
                         ) : (
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingCard(card);
+                          }}
+                          title="编辑卡片"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                       </div>
                     </div>
                     {isExpanded && (
@@ -354,6 +369,19 @@ export default function TagDetailPage() {
             ))
           )}
         </div>
+      )}
+
+      {/* Card Edit Modal */}
+      {editingCard && token && (
+        <CardEditModal
+          card={editingCard}
+          token={token}
+          onSaved={(updated) => {
+            setCards((prev) => prev.map((c) => c.id === editingCard.id ? { ...c, ...updated } : c));
+            setEditingCard(null);
+          }}
+          onClose={() => setEditingCard(null)}
+        />
       )}
     </div>
   );

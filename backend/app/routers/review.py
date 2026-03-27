@@ -242,6 +242,73 @@ def get_stats(
     return StudyStatsResponse(**stats)
 
 
+@router.get("/dashboard")
+def get_dashboard(
+    tz: str | None = Query(None, description="IANA timezone, e.g. Asia/Shanghai"),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Aggregated dashboard data — returns stats, categories, active sessions,
+    daily recommendation, and active quiz session in a single request."""
+    from app.routers.categories import list_categories
+    from app.routers.article_analysis import daily_recommendation
+
+    # 1. Stats
+    service = ReviewService(
+        session=session,
+        user_id=current_user.id,
+        desired_retention=current_user.desired_retention,
+    )
+    user_tz: ZoneInfo | None = None
+    if tz:
+        try:
+            user_tz = ZoneInfo(tz)
+        except Exception:
+            pass
+    stats = service.get_study_stats(tz=user_tz)
+
+    # 2. Categories (reuse existing function logic)
+    cat_data = list_categories(session=session, current_user=current_user)
+
+    # 3. Active study session (exclude quiz)
+    active_session = None
+    try:
+        session_obj = service.get_active_session(exclude_modes=["quiz"])
+        if session_obj:
+            active_session = StudySessionResponse.model_validate(session_obj).model_dump()
+    except Exception:
+        pass
+
+    # 4. Daily recommendation
+    rec = None
+    try:
+        rec_data = daily_recommendation(current_user=current_user, session=session)
+        if rec_data and rec_data.get("id"):
+            rec = rec_data
+    except Exception:
+        pass
+
+    # 5. Active quiz session
+    quiz_session = None
+    try:
+        quiz_obj = service.get_active_session(only_mode="quiz")
+        if quiz_obj:
+            quiz_session = StudySessionResponse.model_validate(quiz_obj).model_dump()
+    except Exception:
+        pass
+
+    return {
+        "stats": stats,
+        "categories": cat_data.get("categories", []),
+        "ai_categories": cat_data.get("ai_categories", []),
+        "custom_decks": cat_data.get("custom_decks", []),
+        "all_decks": cat_data.get("all_decks", []),
+        "active_session": active_session,
+        "recommendation": rec,
+        "quiz_session": quiz_session,
+    }
+
+
 @router.post("/reset/all")
 def reset_all(
     current_user: User = Depends(get_current_user),

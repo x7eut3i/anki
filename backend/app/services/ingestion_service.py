@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 import feedparser
 import httpx
-from bs4 import BeautifulSoup
 from sqlmodel import Session
 
 from app.models.card import Card
@@ -104,6 +103,7 @@ class IngestionService:
                 response = await client.get(url)
                 response.raise_for_status()
 
+            from bs4 import BeautifulSoup
             soup = BeautifulSoup(response.text, "lxml")
             articles = []
 

@@ -18,7 +18,7 @@ def init():
     """Call once at startup (lifespan). Starts tracemalloc if MEMORY_DIAG=1."""
     global _enabled
     if os.environ.get("MEMORY_DIAG", "0") == "1":
-        tracemalloc.start(25)  # 25-frame call stacks
+        tracemalloc.start(10)  # 10-frame call stacks (reduced from 25 to save memory)
         _enabled = True
 
 

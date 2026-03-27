@@ -28,6 +28,8 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { CardDetailPanel, CardHeaderBadges, parseJson } from "@/components/card-detail";
 import { HighlightText } from "@/components/highlight-text";
+import { CardEditModal } from "@/components/card-edit-modal";
+import { Pencil } from "lucide-react";
 
 export default function DecksPage() {
   const { token } = useAuthStore();
@@ -47,6 +49,7 @@ export default function DecksPage() {
   const [expandedSearchCard, setExpandedSearchCard] = useState<number | null>(null);
   const [searchBatchMode, setSearchBatchMode] = useState(false);
   const [selectedSearchCards, setSelectedSearchCards] = useState<Set<number>>(new Set());
+  const [editingSearchCard, setEditingSearchCard] = useState<any | null>(null);
 
   // Sort & filter
   type SortKey = "name" | "card_count" | "created_at";
@@ -459,6 +462,18 @@ export default function DecksPage() {
                               <Button
                                 variant="ghost"
                                 size="icon"
+                                className="h-8 w-8"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingSearchCard(card);
+                                }}
+                                title="编辑卡片"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
                                 className="h-8 w-8 text-destructive"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -559,6 +574,21 @@ export default function DecksPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {/* Card Edit Modal for search results */}
+      {editingSearchCard && token && (
+        <CardEditModal
+          card={editingSearchCard}
+          token={token}
+          onSaved={(updated) => {
+            setSearchResults((prev) =>
+              prev ? prev.map((c) => c.id === editingSearchCard.id ? { ...c, ...updated } : c) : null
+            );
+            setEditingSearchCard(null);
+          }}
+          onClose={() => setEditingSearchCard(null)}
+        />
       )}
     </div>
   );

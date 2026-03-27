@@ -13,9 +13,14 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger("anki.crawlers")
+
+
+def _bs4(html: str, parser: str = "html.parser"):
+    """Lazy-import BeautifulSoup to avoid loading bs4/lxml at module level."""
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html, parser)
 
 # ── Anti-crawl: UA rotation ──
 _USER_AGENTS = [
@@ -124,7 +129,7 @@ async def crawl_rmrb(date: datetime | None = None) -> list[dict]:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(f"{base_url}/node_01.html", headers=HEADERS)
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = _bs4(resp.text)
 
         # Parse all section links: node_XX.html
         section_links = []
@@ -184,7 +189,7 @@ async def crawl_rmrb(date: datetime | None = None) -> list[dict]:
                     await _polite_delay(0.3, 1.0)
                     resp = await client.get(sec["url"], headers=_random_headers())
                     resp.raise_for_status()
-                    sec_soup = BeautifulSoup(resp.text, "html.parser")
+                    sec_soup = _bs4(resp.text)
 
                     for a in sec_soup.find_all("a", href=True):
                         if "content_" in a["href"] and a.get_text(strip=True):
@@ -308,7 +313,7 @@ async def crawl_qiushi() -> list[dict]:
             # Step 1: Fetch directory page to find latest year
             resp = await client.get("https://www.qstheory.cn/qs/mulu.htm", headers=_random_headers())
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = _bs4(resp.text)
 
             # Find all year links
             year_links = []
@@ -332,7 +337,7 @@ async def crawl_qiushi() -> list[dict]:
             await _polite_delay(0.5, 1.5)
             resp = await client.get(latest_year["url"], headers=_random_headers())
             resp.raise_for_status()
-            year_soup = BeautifulSoup(resp.text, "html.parser")
+            year_soup = _bs4(resp.text)
 
             issue_links = []
             for a in year_soup.find_all("a", href=True):
@@ -356,7 +361,7 @@ async def crawl_qiushi() -> list[dict]:
             await _polite_delay(0.5, 1.5)
             resp = await client.get(latest_issue["url"], headers=_random_headers())
             resp.raise_for_status()
-            issue_soup = BeautifulSoup(resp.text, "html.parser")
+            issue_soup = _bs4(resp.text)
 
             for a in issue_soup.find_all("a", href=True):
                 title = a.get_text(strip=True)
@@ -434,7 +439,7 @@ async def crawl_qiushi_issues(year: int) -> list[dict]:
                 "https://www.qstheory.cn/qs/mulu.htm", headers=_random_headers(),
             )
             resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = _bs4(resp.text)
 
             year_url = None
             for a in soup.find_all("a", href=True):
@@ -454,7 +459,7 @@ async def crawl_qiushi_issues(year: int) -> list[dict]:
             await _polite_delay(0.5, 1.5)
             resp = await client.get(year_url, headers=_random_headers())
             resp.raise_for_status()
-            year_soup = BeautifulSoup(resp.text, "html.parser")
+            year_soup = _bs4(resp.text)
 
             issues = []
             for a in year_soup.find_all("a", href=True):
@@ -518,7 +523,7 @@ async def crawl_qiushi_issue(issue_url: str, issue_name: str = "") -> list[dict]
             resp = await client.get(issue_url, headers=_random_headers())
             resp.raise_for_status()
             html_text = resp.text
-            issue_soup = BeautifulSoup(html_text, "html.parser")
+            issue_soup = _bs4(html_text)
 
             all_links = issue_soup.find_all("a", href=True)
             logger.info("求是 %s: fetched issue page (%d bytes, %d links), expected_year=%d",
@@ -599,7 +604,7 @@ def extract_article_content(html: str, url: str = "") -> tuple[str, str]:
     summary_html = doc.summary()
 
     # Parse the cleaned HTML to get plain text
-    soup = BeautifulSoup(summary_html, "html.parser")
+    soup = _bs4(summary_html)
 
     # Remove remaining unwanted elements
     for tag in soup.find_all(["script", "style", "nav", "header", "footer", "iframe", "noscript"]):
@@ -677,7 +682,7 @@ def extract_article_date(html: str, url: str = "") -> str:
     3. Date pattern in URL
     Returns date string like '2026-02-27' or '' if not found.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _bs4(html)
 
     # Method 0: Domain-specific selectors (meta tags are unreliable on some sites)
     is_paper_people = "paper.people.com.cn" in url
@@ -775,7 +780,7 @@ def extract_article_author(html: str, url: str = "") -> str:
     3. Inline text patterns like '作者：xxx' or '来源：xxx  作者：xxx'
     Returns author string or '' if not found.
     """
-    soup = BeautifulSoup(html, "html.parser")
+    soup = _bs4(html)
 
     # Method 0: Domain-specific selectors
     is_paper_people = "paper.people.com.cn" in url
@@ -1067,7 +1072,7 @@ async def crawl_normal_source(
                         "date": entry.get("published", ""),
                     })
         else:
-            soup = BeautifulSoup(page_content, "html.parser")
+            soup = _bs4(page_content)
             seen_urls = set()
             for a in soup.find_all("a", href=True):
                 title = a.get_text(strip=True)

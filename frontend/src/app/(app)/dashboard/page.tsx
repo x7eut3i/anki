@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuthStore } from "@/lib/store";
-import { review, categories as catApi, reading } from "@/lib/api";
+import { review } from "@/lib/api";
 import { getUserTimezone } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,20 +33,16 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!token) return;
     const fetchAll = () =>
-      Promise.all([
-        review.stats(token, getUserTimezone()),
-        catApi.listAll(token),
-        review.getActiveSession(token).catch(() => null),
-        reading.dailyRecommendation(token).catch(() => null),
-        review.getActiveQuizSession(token).catch(() => null),
-      ])
-        .then(([s, catData, session, rec, quizSession]) => {
-          setStats(s);
-          setCats(catData.categories);
-          setAiCats(catData.ai_categories || []);
-          setCustomDecks(catData.custom_decks || []);
-          setAllDecks(catData.all_decks || []);
+      review.dashboard(token, getUserTimezone())
+        .then((data: any) => {
+          setStats(data.stats);
+          setCats(data.categories || []);
+          setAiCats(data.ai_categories || []);
+          setCustomDecks(data.custom_decks || []);
+          setAllDecks(data.all_decks || []);
+          const rec = data.recommendation;
           if (rec && rec.id) setRecommendation(rec);
+          const session = data.active_session;
           if (session && !session.is_completed) {
             try {
               const remaining = JSON.parse(session.remaining_card_ids || "[]");
@@ -61,7 +57,7 @@ export default function DashboardPage() {
           } else {
             setActiveSession(null);
           }
-          // Check for active quiz session on server
+          const quizSession = data.quiz_session;
           if (quizSession && !quizSession.is_completed) {
             setQuizRecovery(quizSession);
           } else {

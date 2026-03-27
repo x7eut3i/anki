@@ -74,6 +74,8 @@ async def _run_ingestion_job():
         logger.info("✅ Scheduled ingestion pipeline completed")
     except Exception as e:
         logger.error("❌ Scheduled ingestion failed: %s", e, exc_info=True)
+    finally:
+        import gc; gc.collect()
 
 
 def _build_trigger(cfg) -> CronTrigger | None:

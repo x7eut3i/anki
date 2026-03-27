@@ -16,6 +16,12 @@ RUN npm run build
 FROM python:3.14.3-slim
 WORKDIR /app
 
+# jemalloc: dramatically reduces memory fragmentation in long-running Python
+# processes (lxml, cryptography, SQLAlchemy all fragment glibc malloc badly).
+RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf $(find /usr/lib -name "libjemalloc.so.2" | head -1) /usr/lib/libjemalloc.so.2
+
 # Install Python deps (all have pre-built wheels, no gcc needed)
 COPY backend/pyproject.toml ./
 RUN pip install --no-cache-dir . && rm -rf /root/.cache
@@ -30,8 +36,10 @@ COPY --from=frontend /build/out ./static/
 
 EXPOSE 8000
 
-# Limit glibc malloc arenas to reduce memory fragmentation in containers.
-# Default is 8*NCPU; on a single-worker app this wastes hundreds of MB.
+# Use jemalloc as the system allocator — replaces glibc malloc.
+# Reduces RSS by 30-50% for Python apps with heavy C extensions.
+ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
+# Keep MALLOC_ARENA_MAX as a fallback hint (jemalloc respects it too).
 ENV MALLOC_ARENA_MAX=2
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

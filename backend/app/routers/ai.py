@@ -915,6 +915,8 @@ def _bg_smart_import(job_id: int, user_id: int, deck_id: int, file_bytes: bytes,
     except Exception as e:
         logger.error("BG smart import error: %s", e, exc_info=True)
         update_job_status(job_id, "failed", error_message=str(e)[:2000])
+    finally:
+        import gc; gc.collect()
 
 
 def _bg_batch_enrich(job_id: int, user_id: int, card_ids: list[int], deck_id: int | None, batch_size: int):
@@ -1020,6 +1022,8 @@ def _bg_batch_enrich(job_id: int, user_id: int, card_ids: list[int], deck_id: in
     except Exception as e:
         logger.error("BG batch enrich error: %s", e, exc_info=True)
         update_job_status(job_id, "failed", error_message=str(e)[:2000])
+    finally:
+        import gc; gc.collect()
 
 
 def _bg_complete_and_create_cards(
@@ -1263,6 +1267,8 @@ def _bg_complete_and_create_cards(
     except Exception as e:
         logger.error("BG complete and create cards error: %s", e, exc_info=True)
         update_job_status(job_id, "failed", error_message=str(e)[:2000])
+    finally:
+        import gc; gc.collect()
 
 
 @router.post("/complete-cards/async")

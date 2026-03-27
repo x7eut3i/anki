@@ -39,6 +39,7 @@ import {
   parseJson,
 } from "@/components/card-detail";
 import { HighlightText } from "@/components/highlight-text";
+import { CardEditModal } from "@/components/card-edit-modal";
 
 export default function DeckDetailPage() {
   const { token } = useAuthStore();
@@ -59,7 +60,6 @@ export default function DeckDetailPage() {
 
   // Card editing
   const [editingCard, setEditingCard] = useState<any | null>(null);
-  const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   // Regenerate questions
@@ -231,60 +231,7 @@ export default function DeckDetailPage() {
 
   // ── Card editing ──
   const startEditing = (card: any) => {
-    const meta = parseJson<Record<string, any> | null>(card.meta_info, null);
-    const distractors = parseJson<string[]>(card.distractors, []);
     setEditingCard(card);
-    setEditForm({
-      front: card.front || "",
-      back: card.back || "",
-      explanation: card.explanation || "",
-      distractors: distractors.join("\n"),
-      tags: card.tags || "",
-      source: card.source || "",
-      meta_info: meta ? JSON.stringify(meta, null, 2) : "",
-    });
-  };
-
-  const handleSaveEdit = async () => {
-    if (!token || !editingCard) return;
-    setSaving(true);
-    try {
-      // Convert distractors from newline-separated to JSON array
-      const distractorsArr = editForm.distractors
-        .split("\n")
-        .map((d) => d.trim())
-        .filter(Boolean);
-      const updateData: Record<string, any> = {
-        front: editForm.front,
-        back: editForm.back,
-        explanation: editForm.explanation,
-        distractors: JSON.stringify(distractorsArr),
-        source: editForm.source,
-      };
-      if (editForm.tags !== (editingCard.tags || "")) {
-        updateData.tags = editForm.tags;
-      }
-      if (editForm.meta_info.trim()) {
-        try {
-          JSON.parse(editForm.meta_info);
-          updateData.meta_info = editForm.meta_info;
-        } catch {
-          alert("meta_info 不是有效的 JSON 格式");
-          setSaving(false);
-          return;
-        }
-      } else {
-        updateData.meta_info = "";
-      }
-      const updated = await cardApi.update(editingCard.id, updateData, token);
-      setCards((prev) => prev.map((c) => c.id === editingCard.id ? { ...c, ...updated } : c));
-      setEditingCard(null);
-    } catch (err) {
-      console.error("Save failed:", err);
-      alert("保存失败，请重试");
-    } finally {
-      setSaving(false);
-    }
   };
 
   // ── Regenerate questions ──
@@ -710,87 +657,16 @@ export default function DeckDetailPage() {
       </Card>
 
       {/* ── Edit Card Modal ── */}
-      {editingCard && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingCard(null)}>
-          <div
-            className="bg-background rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-4 border-b">
-              <h3 className="font-semibold text-lg">✏️ 编辑卡片</h3>
-              <button onClick={() => setEditingCard(null)} className="text-muted-foreground hover:text-foreground">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="p-4 space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-1 block">题面 (front)</label>
-                <textarea
-                  className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
-                  value={editForm.front}
-                  onChange={(e) => setEditForm({ ...editForm, front: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">答案 (back)</label>
-                <textarea
-                  className="w-full min-h-[60px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
-                  value={editForm.back}
-                  onChange={(e) => setEditForm({ ...editForm, back: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">解析 (explanation)</label>
-                <textarea
-                  className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
-                  value={editForm.explanation}
-                  onChange={(e) => setEditForm({ ...editForm, explanation: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">干扰项（每行一个）</label>
-                <textarea
-                  className="w-full min-h-[60px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y"
-                  value={editForm.distractors}
-                  onChange={(e) => setEditForm({ ...editForm, distractors: e.target.value })}
-                  placeholder="错误选项1&#10;错误选项2&#10;错误选项3"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">标签（逗号分隔）</label>
-                <input
-                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                  value={editForm.tags}
-                  onChange={(e) => setEditForm({ ...editForm, tags: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">来源 (source)</label>
-                <div className="w-full min-h-[36px] rounded-md border border-input bg-muted/50 px-3 py-2 text-sm text-muted-foreground break-all">
-                  {editForm.source || <span className="italic">无</span>}
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-1 block">元信息 (meta_info) — JSON</label>
-                <textarea
-                  className="w-full min-h-[240px] rounded-md border border-input bg-background px-3 py-2 text-sm font-mono resize-y"
-                  value={editForm.meta_info}
-                  onChange={(e) => setEditForm({ ...editForm, meta_info: e.target.value })}
-                  placeholder='{"knowledge": "...", "exam_focus": "..."}'
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 p-4 border-t">
-              <Button variant="outline" onClick={() => setEditingCard(null)}>
-                取消
-              </Button>
-              <Button onClick={handleSaveEdit} disabled={saving}>
-                <Save className="mr-1 h-4 w-4" />
-                {saving ? "保存中…" : "保存"}
-              </Button>
-            </div>
-          </div>
-        </div>
+      {editingCard && token && (
+        <CardEditModal
+          card={editingCard}
+          token={token}
+          onSaved={(updated) => {
+            setCards((prev) => prev.map((c) => c.id === editingCard.id ? { ...c, ...updated } : c));
+            setEditingCard(null);
+          }}
+          onClose={() => setEditingCard(null)}
+        />
       )}
     </div>
   );

@@ -72,19 +72,38 @@ export default function Flashcard({
   // Random display type: 60% QA, 40% choice (applied per card)
   const [randomForceType, setRandomForceType] = useState<"qa" | "choice">("choice");
 
+  // Cache altQuestion and randomForceType per card.id within this session
+  // so navigating back to a card shows the same question variant
+  const altQuestionCache = React.useRef<Map<number, {
+    alt: { question: string; answer: string; choices?: string[]; distractors?: string[] } | null;
+    forceType: "qa" | "choice";
+  }>>(new Map());
+
   // Reset when card changes & randomly pick from [front/back, ...alternates]
   React.useEffect(() => {
     setSelectedChoice(null);
-    // 实词辨析 cards: always choice; others: 60% QA, 40% choice
-    if (card.category_name === "实词辨析") {
-      setRandomForceType("choice");
-    } else {
-      setRandomForceType(Math.random() < 0.6 ? "qa" : "choice");
+
+    // Check cache first — return same variant when navigating back
+    const cached = altQuestionCache.current.get(card.id);
+    if (cached) {
+      setAltQuestion(cached.alt);
+      setRandomForceType(cached.forceType);
+      return;
     }
+
+    // 实词辨析 cards: always choice; others: 60% QA, 40% choice
+    let ft: "qa" | "choice";
+    if (card.category_name === "实词辨析") {
+      ft = "choice";
+    } else {
+      ft = Math.random() < 0.6 ? "qa" : "choice";
+    }
+    setRandomForceType(ft);
 
     // 成语 cards: always use original front/back, never alternate questions
     if (card.category_name === "成语") {
       setAltQuestion(null);
+      altQuestionCache.current.set(card.id, { alt: null, forceType: ft });
       return;
     }
 
@@ -95,11 +114,14 @@ export default function Flashcard({
       if (candidates.length) {
         // Pool: [null (= use original front/back), ...candidates]
         const pool: (any | null)[] = [null, ...candidates];
-        setAltQuestion(pool[Math.floor(Math.random() * pool.length)]);
+        const picked = pool[Math.floor(Math.random() * pool.length)];
+        setAltQuestion(picked);
+        altQuestionCache.current.set(card.id, { alt: picked, forceType: ft });
         return;
       }
     }
     setAltQuestion(null);
+    altQuestionCache.current.set(card.id, { alt: null, forceType: ft });
   }, [card.id, card.meta_info]);
 
   // Effective front/back (may be overridden by alternate question)
@@ -136,16 +158,22 @@ export default function Flashcard({
   const choices: string[] = React.useMemo(() => {
     if (!isChoice) return [];
     const opts = [...distractors, effectiveBack];
-    // Deterministic shuffle — hash card.id + question text for alternate variety
+    // Deterministic shuffle using seeded xorshift32 PRNG for uniform distribution
     let seed = card.id;
     if (altQuestion) {
       for (let i = 0; i < altQuestion.question.length; i++) {
         seed = ((seed << 5) - seed + altQuestion.question.charCodeAt(i)) | 0;
       }
-      seed = seed >>> 0;
     }
+    seed = (seed ^ 0x5f3759df) >>> 0 || 1; // Ensure non-zero seed
+    const nextRand = () => {
+      seed ^= seed << 13;
+      seed ^= seed >> 17;
+      seed ^= seed << 5;
+      return seed >>> 0;
+    };
     for (let i = opts.length - 1; i > 0; i--) {
-      const j = ((seed * (i + 1) * 2654435761) >>> 0) % (i + 1);
+      const j = nextRand() % (i + 1);
       [opts[i], opts[j]] = [opts[j], opts[i]];
     }
     return opts;

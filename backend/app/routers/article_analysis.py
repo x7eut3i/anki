@@ -195,13 +195,15 @@ def daily_recommendation(
 
     Uses today's date as hash seed so the same article is shown all day.
     Tries quality >= 8.5, then >= 7.5, then any non-archived article.
+    Only loads article IDs (not full content) to avoid memory bloat.
     """
     from datetime import date
     import hashlib
 
+    article_ids: list[int] = []
     for min_score in (8.5, 7.5, 0):
         query = (
-            select(ArticleAnalysis)
+            select(ArticleAnalysis.id)
             .where(
                 ArticleAnalysis.user_id == current_user.id,
                 ArticleAnalysis.status != "archived",
@@ -209,15 +211,20 @@ def daily_recommendation(
         )
         if min_score > 0:
             query = query.where(ArticleAnalysis.quality_score >= min_score)
-        articles = session.exec(query).all()
-        if articles:
+        article_ids = list(session.exec(query).all())
+        if article_ids:
             break
 
-    if not articles:
+    if not article_ids:
         return {"id": None, "title": None}
 
     seed = int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16)
-    pick = articles[seed % len(articles)]
+    pick_id = article_ids[seed % len(article_ids)]
+
+    # Load only the picked article
+    pick = session.get(ArticleAnalysis, pick_id)
+    if not pick:
+        return {"id": None, "title": None}
 
     # Count cards linked to this article
     card_count = 0
@@ -814,6 +821,8 @@ async def _bg_repair_articles_async(
         logger.error("Batch repair crashed: %s", e, exc_info=True)
         update_job_status(job_id, "failed",
                           error_message=f"修复任务异常终止: {type(e).__name__}: {e}")
+    finally:
+        import gc; gc.collect()
 
 
 @router.post("/batch-delete")
@@ -1246,16 +1255,39 @@ async def _bg_analyze_article_async(
         try:
             if is_job_cancelled(job_id):
                 return
-            update_job_status(job_id, "running", progress=10)
+            update_job_status(job_id, "running", progress=5)
 
             config = session.get(AIConfig, config_id)
             if not config:
                 update_job_status(job_id, "failed", error_message="AI配置不存在")
                 return
 
-            # Delegate to shared AI analysis pipeline
-            from app.services.ai_pipeline import ai_analyze_article
+            # Step 1: Clean up raw content using AI (format as Markdown)
+            from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article
 
+            if is_job_cancelled(job_id):
+                return
+            update_job_status(job_id, "running", progress=10)
+
+            cleaned_content, cleanup_ok = await ai_cleanup_content(
+                config, title, content, user_id,
+                source="reading",
+            )
+
+            # Update article with cleaned content
+            article = session.get(ArticleAnalysis, article_id)
+            if article and cleanup_ok and len(cleaned_content) > 80:
+                article.content = cleaned_content
+                article.word_count = len(cleaned_content)
+                session.add(article)
+                session.commit()
+                content = cleaned_content  # Use cleaned content for analysis
+            if article and not cleanup_ok:
+                article.error_state = (article.error_state or 0) | 1  # CLEANUP_FAILED bit
+                session.add(article)
+                session.commit()
+
+            # Step 2: AI analysis
             if is_job_cancelled(job_id):
                 return
             update_job_status(job_id, "running", progress=20)
@@ -1347,6 +1379,9 @@ async def _bg_analyze_article_async(
                                   error_message=f"分析异常: {str(e)[:300]}")
             except Exception:
                 pass
+        finally:
+            # Free temporary objects (analysis dicts, HTML strings, AI responses)
+            import gc; gc.collect()
 
 
 # ── URL Content Fetching ──
