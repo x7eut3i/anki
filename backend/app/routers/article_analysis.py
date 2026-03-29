@@ -897,7 +897,9 @@ async def batch_reanalyze(
             )
 
             content_text = _repair_json(content_text)
-            analysis_data = json.loads(content_text)
+            analysis_data = _robust_json_parse(content_text)
+            if analysis_data is None:
+                raise ValueError("JSON parse failed after all strategies")
 
             from datetime import datetime, timezone
             item.analysis_html = _build_analysis_html(item.title, analysis_data)
@@ -1504,7 +1506,9 @@ async def create_card_from_selection(
             user_id=current_user.id,
         )
         content_text = _repair_json(content_text)
-        card_data = json.loads(content_text)
+        card_data = _robust_json_parse(content_text)
+        if card_data is None:
+            raise json.JSONDecodeError("robust_json_parse returned None", content_text[:200], 0)
         # Handle if AI returns array instead of object
         if isinstance(card_data, list):
             card_data = card_data[0] if card_data else {}

@@ -24,6 +24,15 @@ def repair_json(text: str) -> str:
     # Remove trailing ``` (possibly preceded by whitespace)
     text = re.sub(r"\s*`{1,4}\s*$", "", text)
 
+    # ── Strip leading non-JSON text (e.g. "Here is the result:\n{...") ──
+    text = text.strip()
+    if text and text[0] not in ('{', '['):
+        first_brace = text.find('{')
+        first_bracket = text.find('[')
+        starts = [p for p in (first_brace, first_bracket) if p >= 0]
+        if starts:
+            text = text[min(starts):]
+
     # ── Strip trailing garbage after the last balanced } or ] ──
     # Walk string-aware to find the position where the top-level JSON value ends,
     # then discard anything after it (e.g. trailing ```, extra chars, etc.)

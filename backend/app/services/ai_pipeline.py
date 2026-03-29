@@ -504,7 +504,11 @@ async def ai_analyze_article(
             )
 
             content_text = repair_json(content_text)
-            analysis_data = json.loads(content_text)
+            analysis_data = robust_json_parse(content_text)
+            if analysis_data is None:
+                raise json.JSONDecodeError(
+                    "robust_json_parse returned None", content_text[:200], 0
+                )
             break
         except json.JSONDecodeError as e:
             ai_error_msg = f"AI返回格式错误 (attempt {attempt + 1}/{max_retries}): {e}"

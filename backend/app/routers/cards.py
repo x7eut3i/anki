@@ -392,7 +392,7 @@ async def regenerate_questions(
 
     # Make AI call
     import httpx
-    from app.services.json_repair import robust_json_parse
+    from app.services.json_repair import repair_json, robust_json_parse
 
     model = config.model_pipeline or config.model or "gpt-4o-mini"
     url = f"{config.api_base_url.rstrip('/')}/chat/completions"
@@ -419,7 +419,7 @@ async def regenerate_questions(
 
         content = data["choices"][0]["message"]["content"]
         _tokens = data.get("usage", {}).get("total_tokens", 0)
-        questions = robust_json_parse(content)
+        questions = robust_json_parse(repair_json(content))
 
         if not isinstance(questions, list):
             raise ValueError("AI returned non-array response")

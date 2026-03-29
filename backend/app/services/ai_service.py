@@ -252,9 +252,11 @@ class AIService:
         result = await self.chat_completion(messages, feature="explain")
 
         try:
-            from app.services.json_repair import repair_json
-            parsed = json.loads(repair_json(result["content"]))
-        except (json.JSONDecodeError, KeyError):
+            from app.services.json_repair import repair_json, robust_json_parse
+            parsed = robust_json_parse(repair_json(result["content"]))
+            if parsed is None:
+                raise ValueError("JSON parse failed")
+        except (json.JSONDecodeError, KeyError, ValueError):
             parsed = {
                 "explanation": result["content"],
                 "mnemonic": None,
