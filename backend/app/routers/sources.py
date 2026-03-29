@@ -307,21 +307,8 @@ async def test_source(
 
                 # AI cleanup if available
                 try:
-                    from app.models.ai_config import AIConfig
-                    ai_config = session.exec(
-                        select(AIConfig).where(
-                            AIConfig.user_id == current_user.id,
-                            AIConfig.is_enabled == True,
-                            AIConfig.is_active == True,
-                        )
-                    ).first()
-                    if ai_config and first_body:
-                        from app.services.ai_pipeline import ai_cleanup_content
-                        first_body, _ = await ai_cleanup_content(
-                            ai_config, art["title"], first_body,
-                            current_user.id,
-                            source="crawl",
-                        )
+                    # Content already cleaned by extract_article_content()
+                    pass
                 except Exception as ai_err:
                     logger.warning("AI cleanup skipped in test_source: %s", ai_err)
             except Exception as fetch_err:

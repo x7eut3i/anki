@@ -445,7 +445,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+                from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
 
                 # Capture IDs for per-task sessions (avoid sharing ORM objects across tasks)
@@ -509,18 +509,12 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                                     total_errors += 1
                                 return
 
-                            # Start with all error bits set — clear as each step succeeds
+                            # Start with error bits set — clear as each step succeeds
                             from app.models.article_analysis import ArticleErrorState as _AES
-                            _error_state = _AES.CLEANUP_FAILED | _AES.ANALYSIS_FAILED | _AES.CARD_GEN_FAILED
+                            _error_state = _AES.ANALYSIS_FAILED | _AES.CARD_GEN_FAILED
 
-                            # ── AI Step 1: Content cleanup ──
-                            body_text, cleanup_ok = await ai_cleanup_content(
-                                task_config, title, body_text,
-                                user_id=admin_uid,
-                                source="crawl",
-                            )
-                            if cleanup_ok:
-                                _error_state &= ~_AES.CLEANUP_FAILED
+                            # Content already cleaned by extract_article_content()
+                            # (readability + HTML→Markdown + noise filtering).
 
                             if _cancel_requested:
                                 return
@@ -528,7 +522,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             async with state_lock:
                                 add_entry("info", source_label, f"正在分析: {title}（{len(body_text)}字）")
 
-                            # ── AI Step 2: Article analysis ──
+                            # ── AI Step 1: Article analysis ──
                             analysis_data = await ai_analyze_article(
                                 task_session, task_config, title, body_text,
                                 user_id=admin_uid,
@@ -661,7 +655,7 @@ async def _run_pipeline_internal(run_type: str = "manual"):
                             session.add(log)
                             session.commit()
 
-                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _concurrency = (config.rpm_limit or 0) if (config.rpm_limit or 0) > 0 else 1
                 _sem = _asyncio.Semaphore(_concurrency)
                 add_entry("info", "系统", f"并发上限: {_concurrency}")
 
@@ -873,7 +867,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+                from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
 
                 config_id = config.id
@@ -934,15 +928,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
 
                             # Start with all error bits set — clear as each step succeeds
                             from app.models.article_analysis import ArticleErrorState as _AES_rmrb
-                            _error_state = _AES_rmrb.CLEANUP_FAILED | _AES_rmrb.ANALYSIS_FAILED | _AES_rmrb.CARD_GEN_FAILED
-
-                            body_text, _cleanup_ok = await ai_cleanup_content(
-                                task_config, title, body_text,
-                                user_id=admin_uid,
-                                source="crawl",
-                            )
-                            if _cleanup_ok:
-                                _error_state &= ~_AES_rmrb.CLEANUP_FAILED
+                            _error_state = _AES_rmrb.ANALYSIS_FAILED | _AES_rmrb.CARD_GEN_FAILED
 
                             if _cancel_requested:
                                 return
@@ -1078,7 +1064,7 @@ async def _run_rmrb_backfill_internal(start_date_str: str, end_date_str: str):
                             session.add(log)
                             session.commit()
 
-                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _concurrency = (config.rpm_limit or 0) if (config.rpm_limit or 0) > 0 else 1
                 _sem = _asyncio.Semaphore(_concurrency)
                 add_entry("info", "系统", f"并发上限: {_concurrency}")
 
@@ -1286,7 +1272,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                 if not admin_user:
                     admin_user = session.exec(select(User)).first()
 
-                from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+                from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
                 from app.routers.article_analysis import _build_analysis_html
 
                 config_id = config.id
@@ -1347,15 +1333,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
 
                             # Start with all error bits set — clear as each step succeeds
                             from app.models.article_analysis import ArticleErrorState as _AES_qs
-                            _error_state = _AES_qs.CLEANUP_FAILED | _AES_qs.ANALYSIS_FAILED | _AES_qs.CARD_GEN_FAILED
-
-                            body_text, _cleanup_ok = await ai_cleanup_content(
-                                task_config, title, body_text,
-                                user_id=admin_uid,
-                                source="crawl",
-                            )
-                            if _cleanup_ok:
-                                _error_state &= ~_AES_qs.CLEANUP_FAILED
+                            _error_state = _AES_qs.ANALYSIS_FAILED | _AES_qs.CARD_GEN_FAILED
 
                             if _cancel_requested:
                                 return
@@ -1491,7 +1469,7 @@ async def _run_qiushi_backfill_internal(issues: list[dict]):
                             session.add(log)
                             session.commit()
 
-                _concurrency = max((config.rpm_limit or 0) * 2, 8)
+                _concurrency = (config.rpm_limit or 0) if (config.rpm_limit or 0) > 0 else 1
                 _sem = _asyncio.Semaphore(_concurrency)
                 add_entry("info", "系统", f"并发上限: {_concurrency}")
 

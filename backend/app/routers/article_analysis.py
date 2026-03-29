@@ -552,8 +552,8 @@ async def repair_failed_articles(
     """Find all articles with error_state flags and re-process them in background.
 
     Uses error_state bit flags to determine what repair is needed:
-    - CLEANUP_FAILED (bit 0): re-run cleanup → re-analyze → generate cards
-    - ANALYSIS_FAILED (bit 1, no CLEANUP_FAILED): re-analyze only → generate cards
+    - CLEANUP_FAILED (bit 0): treated as reanalyze (cleanup removed, analysis handles noise)
+    - ANALYSIS_FAILED (bit 1): re-analyze only → generate cards
     - CARD_GEN_FAILED (bit 2, no other flags): only generate cards
     """
     from app.models.article_analysis import ArticleErrorState
@@ -594,7 +594,7 @@ async def repair_failed_articles(
             count_cards += 1
         # Determine ONE repair mode — earliest failed step
         if es & ArticleErrorState.CLEANUP_FAILED:
-            repair_items.append((a.id, "cleanup"))
+            repair_items.append((a.id, "reanalyze"))  # cleanup removed; reanalyze handles noise
         elif es & ArticleErrorState.ANALYSIS_FAILED:
             repair_items.append((a.id, "reanalyze"))
         elif es & ArticleErrorState.CARD_GEN_FAILED:
@@ -673,7 +673,7 @@ async def _bg_repair_articles_async(
     import asyncio as _asyncio
     from app.database import engine
     from app.routers.ai_jobs import update_job_status, is_job_cancelled
-    from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article, ai_generate_cards
+    from app.services.ai_pipeline import ai_analyze_article, ai_generate_cards
     from app.models.article_analysis import ArticleErrorState
     from datetime import datetime as dt_, timezone as tz_
 
@@ -691,13 +691,13 @@ async def _bg_repair_articles_async(
     with Session(engine) as _init_session:
         _init_config = _init_session.get(AIConfig, config_id)
         _rpm = (_init_config.rpm_limit if _init_config else 0) or 0
-    _concurrency = max(_rpm * 2, 8)
+    _concurrency = _rpm if _rpm > 0 else 1
 
     try:
         async def _repair_one(aid: int, mode: str):
             """Repair a single article.
 
-            mode: 'cleanup' | 'reanalyze' | 'cards_only'
+            mode: 'reanalyze' | 'cards_only'
             """
             nonlocal success_analyze, success_cards, failed_count, processed
             if is_job_cancelled(job_id):
@@ -716,28 +716,6 @@ async def _bg_repair_articles_async(
                     art_content = article.content
                     art_source_url = article.source_url or ""
 
-                    if mode == 'cleanup':
-                        # Step 1: Re-run content cleanup
-                        cleaned_content, cleanup_ok = await ai_cleanup_content(
-                            config, art_title, art_content,
-                            user_id=user_id, source="repair",
-                        )
-                        if cleanup_ok:
-                            article.content = cleaned_content
-                            art_content = cleaned_content
-                            article.error_state = (article.error_state or 0) & ~ArticleErrorState.CLEANUP_FAILED
-                            article.updated_at = dt_.now(tz_.utc)
-                            task_session.add(article)
-                            task_session.commit()
-                        else:
-                            # Cleanup still failed
-                            async with state_lock:
-                                failed_count += 1
-                            return
-
-                        # Fall through to re-analyze with cleaned content
-                        mode = 'reanalyze'
-
                     if mode == 'reanalyze':
                         # Step 2: Re-run analysis
                         analysis_data = await ai_analyze_article(
@@ -751,7 +729,8 @@ async def _bg_repair_articles_async(
                             article.analysis_json = json.dumps(analysis_data, ensure_ascii=False)
                             article.quality_score = analysis_data.get("quality_score", 0)
                             article.quality_reason = analysis_data.get("quality_reason", "")
-                            article.error_state = (article.error_state or 0) & ~ArticleErrorState.ANALYSIS_FAILED
+                            # Clear both CLEANUP_FAILED (legacy) and ANALYSIS_FAILED
+                            article.error_state = (article.error_state or 0) & ~(ArticleErrorState.ANALYSIS_FAILED | ArticleErrorState.CLEANUP_FAILED)
                             article.updated_at = dt_.now(tz_.utc)
                             task_session.add(article)
                             task_session.commit()
@@ -1262,35 +1241,12 @@ async def _bg_analyze_article_async(
                 update_job_status(job_id, "failed", error_message="AI配置不存在")
                 return
 
-            # Step 1: Clean up raw content using AI (format as Markdown)
-            from app.services.ai_pipeline import ai_cleanup_content, ai_analyze_article
+            from app.services.ai_pipeline import ai_analyze_article
 
+            # AI analysis (content already cleaned by Python in source_crawlers)
             if is_job_cancelled(job_id):
                 return
             update_job_status(job_id, "running", progress=10)
-
-            cleaned_content, cleanup_ok = await ai_cleanup_content(
-                config, title, content, user_id,
-                source="reading",
-            )
-
-            # Update article with cleaned content
-            article = session.get(ArticleAnalysis, article_id)
-            if article and cleanup_ok and len(cleaned_content) > 80:
-                article.content = cleaned_content
-                article.word_count = len(cleaned_content)
-                session.add(article)
-                session.commit()
-                content = cleaned_content  # Use cleaned content for analysis
-            if article and not cleanup_ok:
-                article.error_state = (article.error_state or 0) | 1  # CLEANUP_FAILED bit
-                session.add(article)
-                session.commit()
-
-            # Step 2: AI analysis
-            if is_job_cancelled(job_id):
-                return
-            update_job_status(job_id, "running", progress=20)
 
             analysis_data = await ai_analyze_article(
                 session, config,
@@ -1330,8 +1286,9 @@ async def _bg_analyze_article_async(
             session.add(article)
             session.commit()
 
-            # Card generation
+            # Card generation — skip for very low quality articles (< 4.0)
             cards_created = 0
+            quality_score = analysis_data.get("quality_score", 0) if analysis_data else 0
             if create_cards and analysis_data:
                 update_job_status(job_id, "running", progress=70)
                 try:
@@ -1398,7 +1355,7 @@ async def fetch_url_content(
 ):
     """Fetch article content from a URL — extract title, content, source, date.
 
-    Uses the shared fetch_and_extract_url + AI cleanup pipeline.
+    Uses readability + HTML→Markdown conversion for content extraction.
     """
     from app.services.source_crawlers import fetch_and_extract_url
 
@@ -1416,22 +1373,9 @@ async def fetch_url_content(
     title = result["title"]
     content = result["content"]
 
-    # Clean up content using AI (if user has AI config enabled)
-    try:
-        config = session.exec(
-            select(AIConfig).where(
-                AIConfig.user_id == current_user.id,
-                AIConfig.is_enabled == True,
-            )
-        ).first()
-        if config and content:
-            from app.services.ai_pipeline import ai_cleanup_content
-            content, _ = await ai_cleanup_content(
-                config, title, content, current_user.id,
-                source="reading",
-            )
-    except Exception as e:
-        logger.warning("AI content cleanup skipped in fetch_url_content: %s", e)
+    # Content is already cleaned by extract_article_content() in source_crawlers
+    # (readability + HTML→Markdown conversion + noise filtering).
+    # No AI cleanup needed — the analysis prompt handles any remaining noise.
 
     return {
         "title": title,

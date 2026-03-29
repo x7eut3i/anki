@@ -591,7 +591,11 @@ async def crawl_qiushi_issue(issue_url: str, issue_name: str = "") -> list[dict]
 # ══════════════════════════════════════════════════════════════════════
 
 def extract_article_content(html: str, url: str = "") -> tuple[str, str]:
-    """Extract article title and clean text from HTML using readability-lxml.
+    """Extract article title and clean Markdown text from HTML using readability-lxml.
+
+    Converts HTML structure to Markdown formatting (headings, bold, lists)
+    so downstream consumers receive clean, readable text without needing
+    a separate AI cleanup step.
 
     Returns (title, body_text).
     """
@@ -603,12 +607,42 @@ def extract_article_content(html: str, url: str = "") -> tuple[str, str]:
     # Get the cleaned HTML content
     summary_html = doc.summary()
 
-    # Parse the cleaned HTML to get plain text
+    # Parse the cleaned HTML and convert to Markdown
     soup = _bs4(summary_html)
 
     # Remove remaining unwanted elements
     for tag in soup.find_all(["script", "style", "nav", "header", "footer", "iframe", "noscript"]):
         tag.decompose()
+
+    # Convert HTML structure to Markdown inline — process from inside out
+    # Headings → Markdown #
+    for level in range(1, 7):
+        for h in soup.find_all(f"h{level}"):
+            prefix = "#" * level
+            h.replace_with(f"\n\n{prefix} {h.get_text(strip=True)}\n\n")
+
+    # Bold/strong → **text**
+    for tag in soup.find_all(["strong", "b"]):
+        text = tag.get_text(strip=True)
+        if text:
+            tag.replace_with(f"**{text}**")
+
+    # Italic/em → *text*
+    for tag in soup.find_all(["em", "i"]):
+        text = tag.get_text(strip=True)
+        if text:
+            tag.replace_with(f"*{text}*")
+
+    # List items → "- " prefix
+    for li in soup.find_all("li"):
+        text = li.get_text(strip=True)
+        if text:
+            li.replace_with(f"\n- {text}")
+
+    # Paragraphs → double newline separation
+    for p in soup.find_all("p"):
+        p.insert_before("\n\n")
+        p.insert_after("\n\n")
 
     # Convert <br> to newlines
     for br in soup.find_all("br"):
