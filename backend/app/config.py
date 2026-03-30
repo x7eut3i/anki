@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     ai_import_batch_chars: int = 128 * 1024
     ai_import_batch_rows: int = 30
 
+    # Debug: log full AI response body (success & failure) to file and DB
+    ai_debug_response: bool = False
+
     # Ingestion
     ingestion_enabled: bool = False
     ingestion_cron_hour: int = 6

@@ -25,6 +25,7 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/anki.db
       - MEMORY_DIAG=1
+      - AI_DEBUG_RESPONSE=true
     networks:
       - shared-net
 #    healthcheck:

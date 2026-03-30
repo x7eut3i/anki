@@ -60,6 +60,11 @@ def log_ai_request(
         ai_logger.error(f"Failed to log AI request: {e}")
 
 
+def _is_debug_response() -> bool:
+    """Check if full AI response logging is enabled via AI_DEBUG_RESPONSE env var."""
+    return os.getenv("AI_DEBUG_RESPONSE", "").lower() in ("1", "true", "yes")
+
+
 def log_ai_response(
     feature: str,
     model: str,
@@ -70,8 +75,8 @@ def log_ai_response(
 ) -> None:
     """Log an incoming AI API response.
 
-    Full response body is only logged at DEBUG level when there is an error.
-    Success responses only get a concise INFO summary line.
+    Full response body is logged at DEBUG level when there is an error,
+    or when AI_DEBUG_RESPONSE is enabled.
     """
     try:
         status = "ERROR" if error else "OK"
@@ -80,18 +85,19 @@ def log_ai_response(
                        f"content_len={len(content) if content else 0}"
                        + (f" | error={error}" if error else ""))
 
-        # Only dump full response body on failure for post-mortem debugging
-        if error:
+        # Dump full response body on failure or when debug mode is enabled
+        if error or _is_debug_response():
             entry = {
-                "direction": "RESPONSE_ERROR",
+                "direction": "RESPONSE_ERROR" if error else "RESPONSE_DEBUG",
                 "feature": feature,
                 "model": model,
                 "tokens_used": tokens_used,
                 "elapsed_ms": elapsed_ms,
-                "error": error,
                 "content_length": len(content) if content else 0,
                 "content": _truncate(content) if content else "",
             }
+            if error:
+                entry["error"] = error
             ai_logger.debug(json.dumps(entry, ensure_ascii=False, indent=2))
     except Exception as e:
         ai_logger.error(f"Failed to log AI response: {e}")
@@ -116,12 +122,16 @@ def log_ai_call_to_db(
     Args:
         source: Caller context, e.g. "crawl", "reading", "manual", "regenerate".
                 Used to filter crawl failures out of AI stats.
-        raw_response: Full raw AI response body (recorded only on failures).
+        raw_response: Full raw AI response body. Stored on failures, or on
+                      success when AI_DEBUG_RESPONSE is enabled.
     """
     try:
         from app.database import engine as db_engine
         from sqlmodel import Session as SyncSession
         from app.models.ai_interaction_log import AIInteractionLog
+
+        # Store raw_response on failure, or on success if debug mode is on
+        store_raw = raw_response if (status != "ok" or _is_debug_response()) else ""
 
         log_entry = AIInteractionLog(
             user_id=user_id,
@@ -135,7 +145,7 @@ def log_ai_call_to_db(
             input_preview=input_preview[:200] if input_preview else "",
             output_length=output_length,
             source=source,
-            raw_response=raw_response[:10000] if raw_response else "",
+            raw_response=store_raw[:10000] if store_raw else "",
         )
         with SyncSession(db_engine) as session:
             session.add(log_entry)
