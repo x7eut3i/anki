@@ -5,6 +5,7 @@ import { useAuthStore } from "@/lib/store";
 import { ai } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ModelComboBox } from "@/components/model-combo-box";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -476,17 +477,12 @@ export default function AIPage() {
             <div>
               <label className="text-sm font-medium">模型</label>
               <div className="flex gap-2">
-                <Input
-                  list="model-list"
-                  placeholder="deepseek-chat"
+                <ModelComboBox
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={setModel}
+                  models={models}
+                  placeholder="deepseek-chat"
                 />
-                <datalist id="model-list">
-                  {models.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
                 <Button
                   variant="outline"
                   size="sm"
@@ -600,17 +596,12 @@ export default function AIPage() {
               <div>
                 <label className="text-sm font-medium">备用模型名称</label>
                 <div className="flex gap-2">
-                  <Input
-                    list="fallback-model-list"
-                    placeholder="留空则不使用备用模型"
+                  <ModelComboBox
                     value={fallbackModel}
-                    onChange={(e) => setFallbackModel(e.target.value)}
+                    onChange={setFallbackModel}
+                    models={models.filter((m) => m !== model)}
+                    placeholder="留空则不使用备用模型"
                   />
-                  <datalist id="fallback-model-list">
-                    {models.filter((m) => m !== model).map((m) => (
-                      <option key={m} value={m} />
-                    ))}
-                  </datalist>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   当主模型遇到 429（频率限制）或服务器错误时，自动切换到此模型。冷却期结束后恢复主模型。
